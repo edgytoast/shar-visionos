@@ -1,0 +1,11 @@
+// Copy this file to Local.xcconfig (git ignores it) and fill it in. It overrides SHARVR.xcconfig.
+
+// Your Team ID: Xcode > Settings > Accounts, select your team; or developer.apple.com, Membership.
+// A free Apple Account works (its Personal Team has an ID too).
+DEVELOPMENT_TEAM = ABCDE12345
+
+// Optional: your own bundle identifier. By default it's com.sharvr.team-<your Team ID>.
+// PRODUCT_BUNDLE_IDENTIFIER = com.example.sharvr
+
+// Optional, for a free Apple Account that can't sign the increased memory limit: build without it.
+// CODE_SIGN_ENTITLEMENTS =

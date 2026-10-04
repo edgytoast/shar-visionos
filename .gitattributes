@@ -1,0 +1,6 @@
+# Force LF everywhere: this repo is consumed on macOS. A CRLF shell script fails
+# with "bad interpreter", and a CRLF patch may not apply.
+* text=auto eol=lf
+# Patches are byte-exact: never convert line endings in them.
+*.patch -text
+*.sh text eol=lf

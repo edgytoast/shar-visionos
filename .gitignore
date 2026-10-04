@@ -1,0 +1,19 @@
+.DS_Store
+Thumbs.db
+
+# Third-party binaries fetched by scripts/fetch-moltenvk.sh — never committed.
+visionos/ThirdParty/
+visionos/App/SHARVR.xcodeproj/
+
+# DerivedData from command-line builds (xcodebuild -derivedDataPath build/DerivedData).
+visionos/App/build/
+
+# scripts/build.sh's default home for the upstream clone and its builds — never committed.
+/build/
+
+# Each builder's own signing settings, and the engine path scripts/build.sh writes.
+visionos/App/Local.xcconfig
+visionos/App/Engine.xcconfig
+
+# Personal terms scripts/stage-release.sh keeps out of the public release, kept out of git itself.
+.release-private-terms

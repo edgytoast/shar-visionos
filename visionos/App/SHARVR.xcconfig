@@ -1,0 +1,22 @@
+// The app's build settings that depend on who builds it and where. Don't edit this file: put
+// your own values in Local.xcconfig (copy Local.xcconfig.example), which git ignores and which is
+// read last, so it wins.
+
+// Your Apple developer Team ID. Xcode needs it to sign the app for your Vision Pro; Simulator
+// builds don't.
+DEVELOPMENT_TEAM =
+
+// Each team gets a bundle identifier of its own, so nobody's build collides with anybody else's
+// App ID. Set your own in Local.xcconfig if you'd rather.
+PRODUCT_BUNDLE_IDENTIFIER = com.sharvr.team-$(DEVELOPMENT_TEAM)
+
+// Raises the memory visionOS lets the app use (the game, its eye images and MoltenVK all count).
+// A free Apple Account may not be able to sign it; see the README's troubleshooting.
+CODE_SIGN_ENTITLEMENTS = SHARVR.entitlements
+
+// Where the upstream engine is cloned and built. scripts/build.sh writes Engine.xcconfig with the
+// path it used, so Xcode links the engine the script built.
+SHAR_WORKING_TREE = $(SRCROOT)/../../build/upstream
+
+#include? "Engine.xcconfig"
+#include? "Local.xcconfig"

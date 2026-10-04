@@ -1,0 +1,2724 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 58bdc6b6..aa4e545b 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -2,6 +2,14 @@ cmake_minimum_required(VERSION 3.6.3...3.10)
+ 
+ project(SRR2)
+ 
++# visionOS (Apple Vision Pro): CompositorServices + MoltenVK. There is no OpenXR runtime on
++# visionOS, so the shared VR layer compiles against the OpenXR headers for its types only.
++if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
++	set(SRR2_VISIONOS ON)
++	# The CompositorServices/ARKit backend is Objective-C++; this must be enabled at top level.
++	enable_language(OBJCXX)
++endif()
++
+ set(SRR2_TITLE "Simpsons Hit & Run")
+ set(SRR2_VERSION "00.61")
+ set(SRR2_FILENAME "Simpsons")
+@@ -19,7 +27,7 @@ option(SRR2_USE_BINK "Use RAD Game Tools Bink SDK instead of FFmpeg" OFF) #lo vu
+ option(SRR2_BUILD_TESTS "Build sample programs for internal libraries" ON)
+ option(SRR2_MICROPROFILE "Use microprofile instead of the internal profiler" OFF)
+ option(SRR2_P3D_CG "Use CG shaders rather than GLSL for OpenGL ES" OFF)
+-if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android")
++if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android" OR SRR2_VISIONOS)
+ 	set(SRR2_OPENXR_DEFAULT ON)
+ else()
+ 	set(SRR2_OPENXR_DEFAULT OFF)
+@@ -39,6 +47,12 @@ if(SRR2_ENABLE_OPENXR)
+ 		add_definitions(-DSRR2_OPENXR_PLATFORM_ANDROID=1)
+ 	elseif(WIN32)
+ 		add_definitions(-DSRR2_OPENXR_PLATFORM_WIN32=1)
++	elseif(SRR2_VISIONOS)
++		# visionOS takes the desktop-VR (PCVR) code paths. Upstream gates those on
++		# SRR2_OPENXR_PLATFORM_WIN32 in ~330 places, almost all of them VR-behaviour switches
++		# rather than Windows APIs. The few truly Windows-specific sites exclude
++		# SRR2_OPENXR_PLATFORM_VISIONOS explicitly.
++		add_definitions(-DSRR2_OPENXR_PLATFORM_VISIONOS=1 -DSRR2_OPENXR_PLATFORM_WIN32=1)
+ 	endif()
+ 	message(STATUS "OpenXR support: enabled")
+ else()
+@@ -48,7 +62,7 @@ endif()
+ # The Quest distribution is the PAL/EFIGS game flow. PCVR is a port of that
+ # build, not of the legacy NTSC Windows frontend: use the same language boot
+ # project, license assets and frontend state machine by default.
+-if(SRR2_ENABLE_OPENXR AND WIN32 AND NOT ANDROID)
++if(SRR2_ENABLE_OPENXR AND (WIN32 OR SRR2_VISIONOS) AND NOT ANDROID)
+ 	set(SRR2_REGION "PAL" CACHE STRING "Select PAL for the EFIGS multi-language version" FORCE)
+ endif()
+ 
+@@ -118,10 +132,22 @@ if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android")
+ endif()
+ 
+ if(SRR2_ENABLE_OPENXR AND NOT ANDROID AND SRR2_VR_RENDERER STREQUAL "VULKAN")
++	# visionOS: pass -DVulkan_INCLUDE_DIR/-DVulkan_LIBRARY pointing at MoltenVK.
+ 	find_package(Vulkan REQUIRED)
+ 	set(VULKAN_LIBRARY Vulkan::Vulkan)
+ endif()
+ 
++if(SRR2_VISIONOS)
++	add_definitions(-DRAD_VISIONOS)
++	# The SwiftUI shell owns the process entry point. SDL_main.h still renames the game's main()
++	# to SDL_main(), but must not supply its own main(), which would collide with the app's.
++	add_definitions(-DSDL_MAIN_NOIMPL)
++	# MoltenVK's Vulkan headers must win over the older copy in SDL3's Khronos dir, which is
++	# only here for the OpenXR headers (same source Android uses).
++	include_directories(${Vulkan_INCLUDE_DIRS})
++	include_directories("${CMAKE_CURRENT_SOURCE_DIR}/libs/SDL3/src/video/khronos")
++endif()
++
+ find_program(CCACHE_FOUND ccache)
+ if(CCACHE_FOUND)
+     set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE ccache)
+@@ -129,7 +155,17 @@ endif()
+ 
+ 
+ # SDL - Configuración por plataforma
+-if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android" OR SRR2_ENABLE_OPENXR)
++if(SRR2_VISIONOS)
++    # The vendored SDL2 has no visionOS support; the vendored SDL3 does, and the engine already
++    # has SDL3 code paths (the desktop build prefers SDL3 as well).
++    message(STATUS "visionOS build - compiling vendored SDL3")
++    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
++    set(SDL_STATIC ON CACHE BOOL "" FORCE)
++    set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
++    add_subdirectory(libs/SDL3 SDL3_Build EXCLUDE_FROM_ALL)
++    include_directories("${CMAKE_CURRENT_SOURCE_DIR}/libs/SDL3/include/SDL3")
++    set(SDL_LIBRARY SDL3::SDL3-static)
++elseif(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android" OR SRR2_ENABLE_OPENXR)
+     # Quest and PCVR use the same vendored SDL2 revision.
+     message(STATUS "VR build - compiling vendored SDL2")
+     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/libs/SDL2/CMakeLists.txt")
+@@ -175,6 +211,20 @@ if(ANDROID)
+     # Variables "compat" por si tus cmakes antiguos usan estas
+     set(PNG_LIBRARY png_static)
+     set(PNG_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/libs/libpng")
++elseif(SRR2_VISIONOS)
++    # Vendored libpng + OpenAL Soft (static) like Android; zlib from the SDK.
++    add_subdirectory(libs/libpng EXCLUDE_FROM_ALL)
++    set(LIBTYPE STATIC)
++    set(ALSOFT_UTILS OFF CACHE BOOL "" FORCE)
++    set(ALSOFT_EXAMPLES OFF CACHE BOOL "" FORCE)
++    set(ALSOFT_INSTALL OFF CACHE BOOL "" FORCE)
++    add_subdirectory(libs/openal-soft EXCLUDE_FROM_ALL)
++    find_package(ZLIB REQUIRED)
++    # The non-Android library paths link PNG::PNG and read OPENAL_INCLUDE_DIR.
++    add_library(PNG::PNG INTERFACE IMPORTED)
++    target_link_libraries(PNG::PNG INTERFACE png_static ZLIB::ZLIB)
++    target_include_directories(PNG::PNG INTERFACE "${CMAKE_SOURCE_DIR}/libs/libpng")
++    set(OPENAL_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/libs/openal-soft/include/AL")
+ else()
+     find_package(PNG REQUIRED)
+ endif()
+@@ -183,7 +233,7 @@ endif()
+ set(THREADS_PREFER_PTHREAD_FLAG ON)
+ find_package(Threads REQUIRED)
+ 
+-if(NOT ANDROID)
++if(NOT ANDROID AND NOT SRR2_VISIONOS)
+   find_package(OpenAL REQUIRED)
+ endif()
+ 
+diff --git a/code/CMakeLists.txt b/code/CMakeLists.txt
+index 2c7bd243..e8d23865 100644
+--- a/code/CMakeLists.txt
++++ b/code/CMakeLists.txt
+@@ -627,9 +627,29 @@ if(SRR2_REGION STREQUAL "PAL")
+ 	)
+ endif()
+ 
++if(SRR2_VISIONOS)
++	# No OpenXR loader on visionOS; these two files are the only OpenXR API callers outside the
++	# runtime. The runtime itself stays: on visionOS its OpenXR internals are replaced by the
++	# CompositorServices core in vr/visionos/ (linked in from the SHAR VR repository by its bootstrap.sh).
++	list(REMOVE_ITEM SRR2_SOURCES
++		"vr/openxr_platform_loader.cpp"
++		"vr/openxr_platform_instance.cpp")
++	# Called on every platform; only the Android and Win32 lists above added it.
++	list(APPEND SRR2_SOURCES "vr/visionos/visionos_compositor.mm" "vr/visionos/visionos_controllers.mm"
++		"vr/visionos/visionos_present.mm" "vr/visionos/visionos_window.mm" "vr/visionos/visionos_mirror.mm"
++		"input/touch/touchinputmodemanager.cpp")
++	set_source_files_properties("vr/visionos/visionos_compositor.mm" "vr/visionos/visionos_controllers.mm"
++		"vr/visionos/visionos_present.mm" "vr/visionos/visionos_window.mm" "vr/visionos/visionos_mirror.mm"
++		PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
++endif()
++
+ if(ANDROID)
+     add_library(main SHARED ${SRR2_SOURCES})
+     set(SRR2_TARGET main)
++elseif(SRR2_VISIONOS)
++    # Linked into the SwiftUI app shell, which owns the process entry point.
++    add_library(main STATIC ${SRR2_SOURCES})
++    set(SRR2_TARGET main)
+ else()
+     add_executable(${PROJECT_NAME} ${SRR2_SOURCES})
+     set(SRR2_TARGET ${PROJECT_NAME})
+@@ -666,7 +686,7 @@ if(WIN32 AND NOT ANDROID AND TARGET SDL2::SDL2)
+ 	)
+ endif()
+ 
+-if(SRR2_ENABLE_OPENXR AND NOT ANDROID)
++if(SRR2_ENABLE_OPENXR AND NOT ANDROID AND NOT SRR2_VISIONOS)
+ 	find_path(SRR2_OPENXR_INCLUDE_DIR openxr/openxr.h REQUIRED)
+ 	target_include_directories(${SRR2_TARGET} PRIVATE ${SRR2_OPENXR_INCLUDE_DIR})
+ 	target_link_libraries(${SRR2_TARGET} PNG::PNG dbghelp)
+diff --git a/code/ai/actor/actoranimation.h b/code/ai/actor/actoranimation.h
+index add186df..39683bbc 100644
+--- a/code/ai/actor/actoranimation.h
++++ b/code/ai/actor/actoranimation.h
+@@ -14,6 +14,7 @@
+ #define ACTORANIMATION_H
+ 
+ #include <radmath/matrix.hpp>
++#include <cstddef>
+ 
+ //===========================================================================
+ // Nested Includes
+diff --git a/code/camera/firstpersoncam.cpp b/code/camera/firstpersoncam.cpp
+index 3e1a2328..6e2b877a 100644
+--- a/code/camera/firstpersoncam.cpp
++++ b/code/camera/firstpersoncam.cpp
+@@ -256,6 +256,8 @@ void FirstPersonCam::Update( unsigned int milliseconds )
+             mVrBaseHeading.NormalizeSafe();
+             mVrStickYaw=0.0f;
+             SharOpenXR::SetVrBaseHeading( mVrBaseHeading );
++            // A turn asked for before this heading (on a menu or a loading screen) doesn't apply.
++            SharOpenXR::ConsumeVrYaw();
+         }
+ #endif
+         mTargetDirty = false;
+@@ -310,6 +312,8 @@ void FirstPersonCam::Update( unsigned int milliseconds )
+             yawDelta=stickYaw*rmt::DegToRadian(SharOpenXR::GetSmoothTurnSpeed())*
+                      (static_cast<float>(milliseconds)/1000.0f);
+         }
++        // A turn the runtime asks for (visionOS: keeping the view in the progressive portal).
++        yawDelta+=SharOpenXR::ConsumeVrYaw();
+         rmt::Matrix yawMatrix;
+         // FillRotateY writes only the 3x3 rotation. Initialize the affine row
+         // before using the matrix; otherwise its stack garbage is interpreted
+@@ -329,7 +333,7 @@ void FirstPersonCam::Update( unsigned int milliseconds )
+             yawMatrix.FillRotateY( mVrStickYaw );
+             mVrBaseHeading.Rotate( yawMatrix );
+         }
+-        else if( stickYaw != 0.0f )
++        else if( yawDelta != 0.0f )
+         {
+             // Heading is a direction (w=0), not a point (w=1).
+             mVrBaseHeading.Rotate( yawMatrix );
+diff --git a/code/loading/p3dfilehandler.cpp b/code/loading/p3dfilehandler.cpp
+index 5b699036..91020cbe 100644
+--- a/code/loading/p3dfilehandler.cpp
++++ b/code/loading/p3dfilehandler.cpp
+@@ -49,12 +49,17 @@ bool FileExistsBesideExecutable( const std::string& relativePath )
+         }
+     }
+ 
++#if SDL_MAJOR_VERSION < 3
+     char* basePath = SDL_GetBasePath();
+     const std::string fullPath = basePath ? std::string( basePath ) + nativePath : nativePath;
+     if( basePath )
+     {
+         SDL_free( basePath );
+     }
++#else
++    const char* basePath = SDL_GetBasePath(); // owned by SDL3; must not be freed
++    const std::string fullPath = basePath ? std::string( basePath ) + nativePath : nativePath;
++#endif
+     FILE* file = fopen( fullPath.c_str(), "rb" );
+     if( !file )
+     {
+diff --git a/code/main/win32crashhandler.cpp b/code/main/win32crashhandler.cpp
+index 0513a701..4f11333e 100644
+--- a/code/main/win32crashhandler.cpp
++++ b/code/main/win32crashhandler.cpp
+@@ -1,6 +1,6 @@
+ #include <main/win32crashhandler.h>
+ 
+-#if defined(SRR2_OPENXR_PLATFORM_WIN32)
++#if defined(SRR2_OPENXR_PLATFORM_WIN32) && !defined(SRR2_OPENXR_PLATFORM_VISIONOS)
+ 
+ #define WIN32_LEAN_AND_MEAN
+ #include <windows.h>
+diff --git a/code/main/win32crashhandler.h b/code/main/win32crashhandler.h
+index 4f785a20..0108754f 100644
+--- a/code/main/win32crashhandler.h
++++ b/code/main/win32crashhandler.h
+@@ -1,7 +1,7 @@
+ #ifndef SRR2_WIN32_CRASH_HANDLER_H
+ #define SRR2_WIN32_CRASH_HANDLER_H
+ 
+-#if defined(SRR2_OPENXR_PLATFORM_WIN32)
++#if defined(SRR2_OPENXR_PLATFORM_WIN32) && !defined(SRR2_OPENXR_PLATFORM_VISIONOS)
+ void InstallWin32CrashHandler();
+ #else
+ inline void InstallWin32CrashHandler() {}
+diff --git a/code/main/win32main.cpp b/code/main/win32main.cpp
+index 64af79f0..24aed17e 100644
+--- a/code/main/win32main.cpp
++++ b/code/main/win32main.cpp
+@@ -140,8 +140,14 @@ extern "C" int main( int argc, char *argv[] )
+     SDL_Init( SDL_INIT_EVENTS | SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER );
+ 
+     SDL_LogSetOutputFunction( LogOutputFunction, NULL );
++#else
++#if defined(RAD_VISIONOS)
++    // No SDL video: CompositorServices presents directly, and SDL's UIKit video backend expects
++    // to own the app lifecycle, which the SwiftUI shell owns instead.
++    SDL_Init( SDL_INIT_EVENTS | SDL_INIT_GAMEPAD );
+ #else
+     SDL_Init( SDL_INIT_EVENTS | SDL_INIT_VIDEO | SDL_INIT_GAMEPAD );
++#endif
+ 
+     SDL_SetLogOutputFunction( LogOutputFunction, NULL );
+ #endif
+diff --git a/code/main/win32platform.cpp b/code/main/win32platform.cpp
+index 7c2975a7..799eb88e 100644
+--- a/code/main/win32platform.cpp
++++ b/code/main/win32platform.cpp
+@@ -337,6 +337,14 @@ bool Win32Platform::InitializeWindow()
+     }
+ #endif
+ 
++#if defined(RAD_VISIONOS)
++    // No window: frames go straight to CompositorServices, there is no OpenGL to create one
++    // with, and SDL video is not initialized. The Vulkan PDDI ignores the window, and SDL3
++    // treats a NULL one as a recoverable error rather than a crash.
++    SDL_SetEventFilter( WndProc, NULL );
++    return true;
++#endif
++
+     // These attributes must be set prior to creating the first window
+ 
+ #if RAD_GLES
+diff --git a/code/memory/memoryutilities.cpp b/code/memory/memoryutilities.cpp
+index d40d907c..576adcc9 100644
+--- a/code/memory/memoryutilities.cpp
++++ b/code/memory/memoryutilities.cpp
+@@ -13,7 +13,9 @@
+ // System Includes
+ //========================================
+ 
++#if !defined(__APPLE__)
+ #include <malloc.h>
++#endif
+ #include <math.h>
+ #include <stdlib.h>
+ 
+diff --git a/code/presentation/gui/frontend/guimanagerfrontend.cpp b/code/presentation/gui/frontend/guimanagerfrontend.cpp
+index 6ba7a27f..ef231201 100644
+--- a/code/presentation/gui/frontend/guimanagerfrontend.cpp
++++ b/code/presentation/gui/frontend/guimanagerfrontend.cpp
+@@ -328,7 +328,7 @@ MEMTRACK_PUSH_GROUP( "CGUIManagerFrontEnd" );
+ 
+     // Construct Graphics before the generated VR screen.  It registers the
+     // frontend's working text style used by VR rows on both PC and Quest.
+-#if defined(RAD_PC) || defined(RAD_ANDROID)
++#if defined(RAD_PC) || defined(RAD_ANDROID) || defined(RAD_VISIONOS)
+     pScroobyScreen = m_pScroobyProject->GetScreen( "Display" );
+     if( pScroobyScreen != NULL )
+     {
+diff --git a/code/presentation/gui/frontend/guiscreendisplay.cpp b/code/presentation/gui/frontend/guiscreendisplay.cpp
+index 1b69ff73..66c17dfa 100644
+--- a/code/presentation/gui/frontend/guiscreendisplay.cpp
++++ b/code/presentation/gui/frontend/guiscreendisplay.cpp
+@@ -38,6 +38,12 @@
+ #include <FeGroup.h>
+ #include <FeText.h>
+ #include <FeSprite.h>
++
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++static const int kRenderScaleSteps=11;  // 50%..150%
++#else
++static const int kRenderScaleSteps=8;   // 50%..120%
++#endif
+ #endif
+ 
+ //===========================================================================
+@@ -110,8 +116,14 @@ MEMTRACK_PUSH_GROUP( "CGuiScreenDisplay" );
+     const char* const materials[]={"Original","Phong","PBR","NPR Toon"};
+     const char* const lights[]={"Off","Optimized","Max"};
+     const char* const reflections[]={"Off","Static","Dynamic"};
+-    const char* const scales[]={"50%","60%","70%","80%","90%","100%","110%","120%"};
+-#if defined(SRR2_OPENXR_PLATFORM_WIN32)
++    const char* const scales[]={"50%","60%","70%","80%","90%","100%","110%","120%","130%","140%","150%"};
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    // Vision Pro renders up to 150%.
++    const char* const antiAliasing[]={"Off","FXAA","SMAA"};
++    const char* const labels[]={"CSM Shadows","Custom Materials","Render","Vehicle Lights","Reflections","Volumetric Light","HDR","Render Scale","Anti-Aliasing"};
++    const char* const* values[]={toggle,toggle,materials,lights,reflections,toggle,toggle,scales,antiAliasing};
++    const int counts[]={2,2,4,3,3,2,2,11,3};
++#elif defined(SRR2_OPENXR_PLATFORM_WIN32)
+     const char* const labels[]={"CSM Shadows","Custom Materials","Render","Vehicle Lights","Reflections","Volumetric Light","HDR","Render Scale"};
+     const char* const* values[]={toggle,toggle,materials,lights,reflections,toggle,toggle,scales};
+     const int counts[]={2,2,4,3,3,2,2,8};
+@@ -122,7 +134,9 @@ MEMTRACK_PUSH_GROUP( "CGuiScreenDisplay" );
+     const int counts[]={2,2,4,3,3,3,8};
+ #endif
+     for(int i=0;i<NUM_MENU_ITEMS;++i){
+-        VrMenuBuilder::Row row=VrMenuBuilder::AddRow(pPage,style,"CleanGraphics",i,labels[i],values[i],counts[i],112,51);
++        // The authored eight rows spanned 112..469; more rows share that span.
++        const int spacing=NUM_MENU_ITEMS>8?357/(NUM_MENU_ITEMS-1):51;
++        VrMenuBuilder::Row row=VrMenuBuilder::AddRow(pPage,style,"CleanGraphics",i,labels[i],values[i],counts[i],112,spacing);
+         m_pMenu->AddMenuItem(row.label,row.value,NULL,NULL,NULL,NULL,SELECTION_ENABLED|VALUES_WRAPPED|TEXT_OUTLINE_ENABLED);
+         m_pMenu->SetSelectionValueCount(i,counts[i]);
+ #if !defined(SRR2_OPENXR_PLATFORM_WIN32)
+@@ -344,9 +358,16 @@ void CGuiScreenDisplay::HandleMessage
+                     }
+                     case MENU_ITEM_RENDER_SCALE:
+                     {
+-                        if(param2<8) SharOpenXR::SetRenderScale(0.5f+0.1f*param2);
++                        if(param2<kRenderScaleSteps) SharOpenXR::SetRenderScale(0.5f+0.1f*param2);
+                         break;
+                     }
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++                    case MENU_ITEM_ANTI_ALIASING:
++                    {
++                        SharOpenXR::SetAntiAliasing(static_cast<int>(param2));
++                        break;
++                    }
++#endif
+ #else
+                     case MENU_ITEM_GAMMA:
+                     {
+@@ -418,7 +439,10 @@ void CGuiScreenDisplay::InitIntro()
+                                 SharOpenXR::IsHdrEnabled() ? 1 : 0 );
+ #endif
+     m_pMenu->SetSelectionValue(MENU_ITEM_RENDER_SCALE,
+-        static_cast<int>(rmt::Clamp((SharOpenXR::GetRenderScale()-0.5f)/0.1f+0.5f,0.0f,7.0f)));
++        static_cast<int>(rmt::Clamp((SharOpenXR::GetRenderScale()-0.5f)/0.1f+0.5f,0.0f,float(kRenderScaleSteps-1))));
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    m_pMenu->SetSelectionValue(MENU_ITEM_ANTI_ALIASING,SharOpenXR::GetAntiAliasing());
++#endif
+     UpdateVrDisplayLabels();
+ #else
+     // update settings
+diff --git a/code/presentation/gui/frontend/guiscreendisplay.h b/code/presentation/gui/frontend/guiscreendisplay.h
+index 3100216c..d7815180 100644
+--- a/code/presentation/gui/frontend/guiscreendisplay.h
++++ b/code/presentation/gui/frontend/guiscreendisplay.h
+@@ -66,6 +66,9 @@ private:
+         MENU_ITEM_REFRESH_RATE,
+ #endif
+         MENU_ITEM_RENDER_SCALE,
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++        MENU_ITEM_ANTI_ALIASING,
++#endif
+ #else
+         MENU_ITEM_RESOLUTION,
+         MENU_ITEM_COLOUR_DEPTH,
+diff --git a/code/presentation/gui/frontend/guiscreenoptions.cpp b/code/presentation/gui/frontend/guiscreenoptions.cpp
+index 308573a7..3a091baf 100644
+--- a/code/presentation/gui/frontend/guiscreenoptions.cpp
++++ b/code/presentation/gui/frontend/guiscreenoptions.cpp
+@@ -96,7 +96,7 @@ MEMTRACK_PUSH_GROUP( "CGUIScreenOptions" );
+     Scrooby::Group* pGroup = pPage->GetGroup( "Menu" );
+     rAssert( pGroup != NULL );
+ 
+-#if defined(RAD_PC) || defined(RAD_ANDROID)
++#if defined(RAD_PC) || defined(RAD_ANDROID) || defined(RAD_VISIONOS)
+     m_pMenu->AddMenuItem( pGroup->GetText( "Display" ) );
+ #endif
+     m_pMenu->AddMenuItem( pGroup->GetText( "Controller" ) );
+@@ -104,7 +104,7 @@ MEMTRACK_PUSH_GROUP( "CGUIScreenOptions" );
+     m_pMenu->AddMenuItem( pGroup->GetText( "ViewMovies" ) );
+     m_pMenu->AddMenuItem( pGroup->GetText( "ViewCredits" ) );
+ 
+-#if !defined(RAD_PC) && !defined(RAD_ANDROID)
++#if !defined(RAD_PC) && !defined(RAD_ANDROID) && !defined(RAD_VISIONOS)
+     Scrooby::Text* display = pGroup->GetText( "Display" );
+     if( display != NULL )
+     {
+@@ -420,7 +420,7 @@ void CGuiScreenOptions::HandleMessage
+ 
+                         break;
+                     }
+-#if defined(RAD_PC) || defined(RAD_ANDROID)
++#if defined(RAD_PC) || defined(RAD_ANDROID) || defined(RAD_VISIONOS)
+                     case MENU_ITEM_DISPLAY:
+                     {
+                         m_pParent->HandleMessage( GUI_MSG_GOTO_SCREEN, GUI_SCREEN_ID_DISPLAY );
+diff --git a/code/presentation/gui/frontend/guiscreenoptions.h b/code/presentation/gui/frontend/guiscreenoptions.h
+index d075cd2f..4ad85da4 100644
+--- a/code/presentation/gui/frontend/guiscreenoptions.h
++++ b/code/presentation/gui/frontend/guiscreenoptions.h
+@@ -57,7 +57,7 @@ private:
+ 
+     enum eMenuItem
+     {
+-#if defined(RAD_PC) || defined(RAD_ANDROID)
++#if defined(RAD_PC) || defined(RAD_ANDROID) || defined(RAD_VISIONOS)
+         MENU_ITEM_DISPLAY,
+ #endif
+         MENU_ITEM_CONTROLLER,
+diff --git a/code/presentation/gui/guiscreen.cpp b/code/presentation/gui/guiscreen.cpp
+index 40788f8b..7d7ab8c5 100644
+--- a/code/presentation/gui/guiscreen.cpp
++++ b/code/presentation/gui/guiscreen.cpp
+@@ -259,6 +259,21 @@ CGuiScreen::CGuiScreen
+                 icon->ResetTransformation();
+                 icon->ScaleAboutCenter( BUTTON_SCALE );
+             }
++#if defined(RAD_VISIONOS)
++            // visionOS is played with controllers: keep the label ("Continue") and hide the PC key
++            // icon beside it ([ENTER]).
++            if( Scrooby::Text* label = m_buttonIcons[ BUTTON_ICON_ACCEPT ]->GetText( "Accept" ) )
++            {
++                for( unsigned int i = 0; i < m_buttonIcons[ BUTTON_ICON_ACCEPT ]->Size(); i++ )
++                {
++                    Scrooby::Drawable* child = m_buttonIcons[ BUTTON_ICON_ACCEPT ]->GetChildDrawable( i );
++                    if( child != NULL && child != static_cast< Scrooby::Drawable* >( label ) )
++                    {
++                        child->SetVisible( false );
++                    }
++                }
++            }
++#endif
+ #else
+             // add text outline to accept text
+             //
+diff --git a/code/presentation/gui/guiwindow.h b/code/presentation/gui/guiwindow.h
+index 37d66877..26ca1a35 100644
+--- a/code/presentation/gui/guiwindow.h
++++ b/code/presentation/gui/guiwindow.h
+@@ -80,7 +80,7 @@ class CGuiWindow : public CGuiEntity
+             GUI_SCREEN_ID_SOUND,
+             GUI_SCREEN_ID_VIEW_MOVIES,
+             GUI_SCREEN_ID_VIEW_CREDITS,
+-#if defined(RAD_PC) || defined(RAD_ANDROID)
++#if defined(RAD_PC) || defined(RAD_ANDROID) || defined(RAD_VISIONOS)
+             GUI_SCREEN_ID_DISPLAY,
+ #endif
+             GUI_SCREEN_ID_PLAY_MOVIE,
+diff --git a/code/presentation/gui/ingame/guimanageringame.cpp b/code/presentation/gui/ingame/guimanageringame.cpp
+index 2dd4213b..5513b4dd 100644
+--- a/code/presentation/gui/ingame/guimanageringame.cpp
++++ b/code/presentation/gui/ingame/guimanageringame.cpp
+@@ -34,7 +34,7 @@
+ #include <presentation/gui/ingame/guiscreenpauseoptions.h>
+ #include <presentation/gui/ingame/guiscreenpausevr.h>
+ #include <presentation/gui/ingame/guiscreenpausedebug.h>
+-#if defined(RAD_PC) || defined(RAD_ANDROID)
++#if defined(RAD_PC) || defined(RAD_ANDROID) || defined(RAD_VISIONOS)
+ #include <presentation/gui/ingame/guiscreenpausedisplay.h>
+ #endif
+ #include <presentation/gui/ingame/guiscreenpausecontroller.h>
+@@ -402,7 +402,7 @@ MEMTRACK_PUSH_GROUP( "CGUIManagerInGame" );
+         pScreen = new CGuiScreenPauseOptions( pScroobyScreen, this );
+         this->AddWindow( CGuiWindow::GUI_SCREEN_ID_OPTIONS, pScreen );
+     }
+-#if defined(RAD_PC) || defined(RAD_ANDROID)
++#if defined(RAD_PC) || defined(RAD_ANDROID) || defined(RAD_VISIONOS)
+     pScroobyScreen = m_pScroobyProject->GetScreen( "PauseDisplay" );
+     if( pScroobyScreen != NULL )
+     {
+diff --git a/code/presentation/gui/ingame/guiscreenpauseoptions.cpp b/code/presentation/gui/ingame/guiscreenpauseoptions.cpp
+index 2a69b0c7..20a75cb6 100644
+--- a/code/presentation/gui/ingame/guiscreenpauseoptions.cpp
++++ b/code/presentation/gui/ingame/guiscreenpauseoptions.cpp
+@@ -40,7 +40,7 @@
+ 
+ enum ePauseMenuItem
+ {
+-#if defined(RAD_PC) || defined(RAD_ANDROID)
++#if defined(RAD_PC) || defined(RAD_ANDROID) || defined(RAD_VISIONOS)
+     MENU_ITEM_DISPLAY,
+ #endif
+     MENU_ITEM_CONTROLLER,
+@@ -56,7 +56,7 @@ enum ePauseMenuItem
+ 
+ static const char* PAUSE_MENU_ITEMS[] =
+ {
+-#if defined(RAD_PC) || defined(RAD_ANDROID)
++#if defined(RAD_PC) || defined(RAD_ANDROID) || defined(RAD_VISIONOS)
+     "Display",
+ #endif
+     "Controller",
+@@ -152,7 +152,7 @@ MEMTRACK_PUSH_GROUP( "CGUIScreenPauseOptions" );
+ 
+     
+ 
+-#if !defined(RAD_PC) && !defined(RAD_ANDROID)
++#if !defined(RAD_PC) && !defined(RAD_ANDROID) && !defined(RAD_VISIONOS)
+     Scrooby::Text* pText = menu->GetText( "Display" );
+     if( pText )
+         pText->SetVisible( false );
+@@ -165,7 +165,7 @@ MEMTRACK_PUSH_GROUP( "CGUIScreenPauseOptions" );
+ 
+     // TC: [TEMP] disable controller screen for now to free up some memory for HUD map
+     //
+-#if !defined(RAD_PC) && !defined(RAD_ANDROID)
++#if !defined(RAD_PC) && !defined(RAD_ANDROID) && !defined(RAD_VISIONOS)
+     m_pMenu->SetMenuItemEnabled( MENU_ITEM_CONTROLLER, false, true );
+ #endif
+ 
+@@ -270,7 +270,7 @@ void CGuiScreenPauseOptions::HandleMessage
+ #endif
+                 }
+             
+-#if defined(RAD_PC) || defined(RAD_ANDROID)
++#if defined(RAD_PC) || defined(RAD_ANDROID) || defined(RAD_VISIONOS)
+                 else if( param1 == MENU_ITEM_DISPLAY )
+                 {
+                     m_pParent->HandleMessage( GUI_MSG_GOTO_SCREEN, GUI_SCREEN_ID_DISPLAY );
+diff --git a/code/presentation/gui/ingame/guiscreenpausesettings.cpp b/code/presentation/gui/ingame/guiscreenpausesettings.cpp
+index 755302cf..6ac860f3 100644
+--- a/code/presentation/gui/ingame/guiscreenpausesettings.cpp
++++ b/code/presentation/gui/ingame/guiscreenpausesettings.cpp
+@@ -417,7 +417,7 @@ void CGuiScreenPauseSettings::HandleMessage
+                     //
+                     GetSuperCamManager()->GetSCC( 0 )->Update( 0 );
+                 }
+-#if !defined(RAD_PC) && !defined(RAD_ANDROID)
++#if !defined(RAD_PC) && !defined(RAD_ANDROID) && !defined(RAD_VISIONOS)
+                 else if( param1 == MENU_ITEM_VIBRATION )
+                 {
+                     if( param2 == 1 ) // vibration turned ON
+diff --git a/code/presentation/gui/ingame/guiscreenpausevr.cpp b/code/presentation/gui/ingame/guiscreenpausevr.cpp
+index 0062ce36..6e809cac 100644
+--- a/code/presentation/gui/ingame/guiscreenpausevr.cpp
++++ b/code/presentation/gui/ingame/guiscreenpausevr.cpp
+@@ -13,7 +13,14 @@
+ #include <FeText.h>
+ 
+ namespace {
+-const char* const Labels[9]={"Mode","Seated Mode","Turn Mode","Turn Speed","Vehicle Control","Vehicle Comfort","Body IK","Developer Menus","Wheel Grip"};
++// The last row, View, is visionOS's alone (full immersion, progressive, or a window in the
++// shared space).
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++const int RowCount=11;
++#else
++const int RowCount=10;
++#endif
++const char* const Labels[11]={"Mode","Seated Mode","Turn Mode","Turn Speed","Vehicle Control","Vehicle Comfort","Body IK","Developer Menus","Wheel Grip","Move Direction","View"};
+ const float VR_SETTINGS_FRAME_HEIGHT_SCALE=1.5f;
+ const float SmoothSpeeds[5]={45,90,120,180,240},SnapAngles[5]={15,30,45,60,90};
+ const char* const ModeValues[]={"Original","VR"};
+@@ -23,6 +30,8 @@ const char* const SmoothSpeedValues[]={"45","90","120","180","240"};
+ const char* const SnapAngleValues[]={"15","30","45","60","90"};
+ const char* const VehicleValues[]={"Stick","VR Wheel","Third Person"};
+ const char* const GripValues[]={"Hold","Toggle"};
++const char* const MoveValues[]={"Head","Controller"};
++const char* const ViewValues[]={"Full","Progressive","Window"};
+ int Closest(const float* v,float x){int b=0;for(int i=1;i<5;++i)if(rmt::Fabs(v[i]-x)<rmt::Fabs(v[b]-x))b=i;return b;}
+ 
+ void ScalePolygonHeight(Scrooby::Polygon* polygon,float scale,int& centerY)
+@@ -74,9 +83,9 @@ void ScaleFrameSpriteHeight(Scrooby::Sprite* sprite,int centerY,float scale)
+ }
+ 
+ CGuiScreenPauseVR::CGuiScreenPauseVR(Scrooby::Screen* screen,CGuiEntity* parent)
+-:CGuiScreen(screen,parent,GUI_SCREEN_ID_VR),m_pMenu(NULL),m_pPage(NULL),m_numRows(9),m_frontendLayout(false)
++:CGuiScreen(screen,parent,GUI_SCREEN_ID_VR),m_pMenu(NULL),m_pPage(NULL),m_numRows(RowCount),m_frontendLayout(false)
+ {
+-    for(int i=0;i<9;++i){m_pRows[i]=NULL;m_pLabels[i]=NULL;m_pValues[i]=NULL;}
++    for(int i=0;i<11;++i){m_pRows[i]=NULL;m_pLabels[i]=NULL;m_pValues[i]=NULL;}
+     m_numericValues[0]=0;
+     m_numericValues[1]=0;
+     m_pPage=m_pScroobyScreen->GetPage("PauseSettings");
+@@ -141,10 +150,12 @@ CGuiScreenPauseVR::CGuiScreenPauseVR(Scrooby::Screen* screen,CGuiEntity* parent)
+     Scrooby::Group* authored=m_pPage->GetGroup("Menu");if(authored)authored->SetVisible(false);
+     FeText* style=VrMenuBuilder::FindStyleText(m_pPage);rAssert(style);
+     m_pMenu=new CGuiMenu(this,m_numRows);
+-    const char* const* values[9]={ModeValues,ToggleValues,TurnValues,SmoothSpeedValues,VehicleValues,ToggleValues,ToggleValues,ToggleValues,GripValues};
+-    const int counts[9]={2,2,2,5,3,2,2,2,2};
+-    for(int i=0;i<9;++i){
+-        VrMenuBuilder::Row row=VrMenuBuilder::AddRow(m_pPage,style,"CleanVR",i,Labels[i],values[i],counts[i],82,43,true);
++    const char* const* values[11]={ModeValues,ToggleValues,TurnValues,SmoothSpeedValues,VehicleValues,ToggleValues,ToggleValues,ToggleValues,GripValues,MoveValues,ViewValues};
++    const int counts[11]={2,2,2,5,3,2,2,2,2,2,3};
++    // The authored nine rows spanned 82..426; more rows share that span.
++    const int spacing=RowCount>9?344/(RowCount-1):43;
++    for(int i=0;i<RowCount;++i){
++        VrMenuBuilder::Row row=VrMenuBuilder::AddRow(m_pPage,style,"CleanVR",i,Labels[i],values[i],counts[i],82,spacing,true);
+         m_pRows[i]=row.group;m_pLabels[i]=row.label;m_pValues[i]=row.value;rAssert(row.label&&row.value);
+         m_pMenu->AddMenuItem(row.label,row.value,NULL,NULL,NULL,NULL,SELECTION_ENABLED|VALUES_WRAPPED|TEXT_OUTLINE_ENABLED);
+         m_pMenu->SetSelectionValueCount(i,counts[i]);
+@@ -171,13 +182,17 @@ void CGuiScreenPauseVR::HandleMessage(eGuiMessage message,unsigned int param1,un
+             else if(param1==6)SharOpenXR::SetBodyIKEnabled(param2!=0);
+             else if(param1==7)SharOpenXR::SetDeveloperMenusEnabled(param2!=0);
+             else if(param1==8)SharOpenXR::SetVehicleGripToggleEnabled(param2!=0);
++            else if(param1==9)SharOpenXR::SetMoveDirection(static_cast<int>(param2));
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++            else if(param1==10)SharOpenXR::SetViewMode(static_cast<int>(param2));
++#endif
+         }
+         if(m_pMenu)m_pMenu->HandleMessage(message,param1,param2);
+     }
+     CGuiScreen::HandleMessage(message,param1,param2);
+ }
+-void CGuiScreenPauseVR::SetVrLayoutVisible(bool visible){for(int i=0;i<9;++i)SetRowVisible(i,visible);}
+-void CGuiScreenPauseVR::SetRowVisible(int row,bool visible){if(row>=0&&row<9&&m_pRows[row])m_pRows[row]->SetVisible(visible);}
++void CGuiScreenPauseVR::SetVrLayoutVisible(bool visible){for(int i=0;i<RowCount;++i)SetRowVisible(i,visible);}
++void CGuiScreenPauseVR::SetRowVisible(int row,bool visible){if(row>=0&&row<RowCount&&m_pRows[row])m_pRows[row]->SetVisible(visible);}
+ void CGuiScreenPauseVR::UpdateNumericValue(int row){
+     if(row!=3)return;
+     const bool snap=SharOpenXR::IsSnapTurnEnabled();
+@@ -195,6 +210,10 @@ void CGuiScreenPauseVR::InitIntro(){
+     m_pMenu->SetSelectionValue(6,SharOpenXR::IsBodyIKEnabled()?1:0);
+     m_pMenu->SetSelectionValue(7,SharOpenXR::IsDeveloperMenusEnabled()?1:0);
+     m_pMenu->SetSelectionValue(8,SharOpenXR::IsVehicleGripToggleEnabled()?1:0);
++    m_pMenu->SetSelectionValue(9,SharOpenXR::GetMoveDirection());
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    m_pMenu->SetSelectionValue(10,SharOpenXR::GetViewMode());
++#endif
+     UpdateNumericValue(3);
+ }
+ void CGuiScreenPauseVR::InitRunning(){}
+diff --git a/code/presentation/gui/ingame/guiscreenpausevr.h b/code/presentation/gui/ingame/guiscreenpausevr.h
+index 03f4bc9a..f5f3dbce 100644
+--- a/code/presentation/gui/ingame/guiscreenpausevr.h
++++ b/code/presentation/gui/ingame/guiscreenpausevr.h
+@@ -27,9 +27,9 @@ private:
+     void UpdateNumericValue( int row );
+     CGuiMenu* m_pMenu;
+     Scrooby::Page* m_pPage;
+-    Scrooby::Group* m_pRows[9];
+-    Scrooby::Text* m_pLabels[9];
+-    Scrooby::Text* m_pValues[9];
++    Scrooby::Group* m_pRows[11];
++    Scrooby::Text* m_pLabels[11];
++    Scrooby::Text* m_pValues[11];
+     int m_numericValues[2];
+     int m_numRows;
+     bool m_frontendLayout;
+diff --git a/code/presentation/gui/ingame/guiscreentutorial.cpp b/code/presentation/gui/ingame/guiscreentutorial.cpp
+index dc15005b..c83a851c 100644
+--- a/code/presentation/gui/ingame/guiscreentutorial.cpp
++++ b/code/presentation/gui/ingame/guiscreentutorial.cpp
+@@ -35,6 +35,12 @@
+ // ATG
+ #include <raddebug.hpp>
+ 
++#if defined(RAD_VISIONOS)
++#include <Text.h>
++#include <vr/openxrmanager.h>
++#include <vr/visionos/visionos_prompts.h>
++#endif
++
+ //===========================================================================
+ // Global Data, Local Data, Local Classes
+ //===========================================================================
+@@ -320,6 +326,27 @@ void CGuiScreenTutorial::InitIntro()
+     rAssert( m_tutorialMessage != NULL );
+     m_tutorialMessage->SetBitmapText( text );
+ 
++#if defined(RAD_VISIONOS)
++    // The PC text names keyboard keys ([W,S,A,D], [LEFT-CLICK]); visionOS is played with
++    // controllers, so name their buttons instead, and in place of the [F1] icon.
++    if( const char* controllerText = SharVisionOS::ControllerTutorialText( index, SharOpenXR::IsVrModeEnabled() ) )
++    {
++        m_tutorialMessage->SetBitmapText( controllerText );
++    }
++    if( Scrooby::Text* disableLabel = m_disableTutorial->GetText( "DisableTutorial" ) )
++    {
++        disableLabel->SetString( 0, SharVisionOS::DisableTutorialsText() );
++        for( unsigned int i = 0; i < m_disableTutorial->Size(); i++ )
++        {
++            Scrooby::Drawable* child = m_disableTutorial->GetChildDrawable( i );
++            if( child != NULL && child != static_cast< Scrooby::Drawable* >( disableLabel ) )
++            {
++                child->SetVisible( false );
++            }
++        }
++    }
++#endif
++
+ #ifdef WAIT_UNTIL_DIALOG_DONE
+     this->SetButtonVisible( BUTTON_ICON_ACCEPT, false ); // hide by default
+ 
+diff --git a/code/presentation/gui/ingame/vrmenubuilder.h b/code/presentation/gui/ingame/vrmenubuilder.h
+index 6177f016..eabec8d5 100644
+--- a/code/presentation/gui/ingame/vrmenubuilder.h
++++ b/code/presentation/gui/ingame/vrmenubuilder.h
+@@ -1,7 +1,7 @@
+ #ifndef VRMENUBUILDER_H
+ #define VRMENUBUILDER_H
+ 
+-#if defined(RAD_ANDROID) || defined(RAD_PC)
++#if defined(RAD_ANDROID) || defined(RAD_PC) || defined(RAD_VISIONOS)
+ 
+ #include <Page.h>
+ #include <Text.h>
+diff --git a/code/render/DSG/InstStatEntityDSG.cpp b/code/render/DSG/InstStatEntityDSG.cpp
+index 398671f3..f7f24c6d 100644
+--- a/code/render/DSG/InstStatEntityDSG.cpp
++++ b/code/render/DSG/InstStatEntityDSG.cpp
+@@ -147,7 +147,7 @@ void InstStatEntityDSG::DisplaySimpleShadow()
+     // These authored ground-projection meshes are legacy fake shadows. With
+     // CSM they would be drawn once in colour and again into each depth map,
+     // where their rectangular carrier geometry casts a square sun shadow.
+-    if(SharOpenXR::IsCsmEnabled()) return;
++    if(SharOpenXR::AreCsmShadowsDrawn()) return;
+ #endif
+     BEGIN_PROFILE("DisplaySimpleShadow")
+     p3d::pddi->SetZWrite(false);
+diff --git a/code/render/DSG/StatePropDSG.cpp b/code/render/DSG/StatePropDSG.cpp
+index c0194ca7..01301011 100644
+--- a/code/render/DSG/StatePropDSG.cpp
++++ b/code/render/DSG/StatePropDSG.cpp
+@@ -374,7 +374,7 @@ StatePropDSG::Display()
+     // Hide the embedded legacy shadow before the composite itself is drawn,
+     // otherwise it enters both the colour pass and the CSM caster pass before
+     // DisplaySimpleShadow gets a chance to turn it off.
+-    if(SharOpenXR::IsCsmEnabled() && m_ShadowElement!=-1 && mpStateProp && mpStateProp->GetDrawable())
++    if(SharOpenXR::AreCsmShadowsDrawn() && m_ShadowElement!=-1 && mpStateProp && mpStateProp->GetDrawable())
+     {
+         tCompositeDrawable* compDraw=static_cast<tCompositeDrawable*>(mpStateProp->GetDrawable());
+         compDraw->GetDrawableElement(m_ShadowElement)->SetVisibility(false);
+@@ -848,7 +848,7 @@ StatePropDSG::DisplaySimpleShadow()
+     // Large state-prop trees carry an authored shadow as a hidden composite
+     // element. CSM replaces it; drawing that element exposes its flat model
+     // and also bakes its rectangular carrier into the sun depth map.
+-    if(SharOpenXR::IsCsmEnabled())
++    if(SharOpenXR::AreCsmShadowsDrawn())
+     {
+         if(m_ShadowElement!=-1 && mpStateProp && mpStateProp->GetDrawable())
+         {
+@@ -878,7 +878,11 @@ StatePropDSG::DisplaySimpleShadow()
+ 	    camPos.Normalize();
+ 	    rmt::Matrix toCamera;
+ 	    toCamera.Identity();
++#if defined(SRR2_OPENXR)
++	    toCamera.FillTranslate( camPos * SharOpenXR::GroundShadowOffset( STATEPROP_SHADOW_Z_OFFSET, 0.2f ) );
++#else
+ 	    toCamera.FillTranslate( camPos * STATEPROP_SHADOW_Z_OFFSET );
++#endif
+     	
+ 	    // Final shadow transform = position/orientation * tocamera translation
+ 	    rmt::Matrix shadowTransform( *mpShadowMatrix );
+diff --git a/code/render/DSG/StaticPhysDSG.cpp b/code/render/DSG/StaticPhysDSG.cpp
+index b0d3b3e9..a78f37a7 100644
+--- a/code/render/DSG/StaticPhysDSG.cpp
++++ b/code/render/DSG/StaticPhysDSG.cpp
+@@ -515,7 +515,7 @@ void StaticPhysDSG::RecomputeShadowPositionNoIntersect( float height, const rmt:
+ void StaticPhysDSG::DisplaySimpleShadow()
+ {
+ #if defined(SRR2_OPENXR)
+-    if(SharOpenXR::IsCsmEnabled()) return;
++    if(SharOpenXR::AreCsmShadowsDrawn()) return;
+ #endif
+     p3d::pddi->SetZWrite(false);
+     BEGIN_PROFILE("DisplaySimpleShadow")
+@@ -535,7 +535,11 @@ void StaticPhysDSG::DisplaySimpleShadow()
+ 	camPos.Normalize();
+     // Distance to raise the object 
+     const float Z_FIGHTING_OFFSET = 1.0f;
++#if defined(SRR2_OPENXR)
++    camPos.Scale( SharOpenXR::GroundShadowOffset( Z_FIGHTING_OFFSET, 0.2f ) );
++#else
+     camPos.Scale( Z_FIGHTING_OFFSET );
++#endif
+ 	
+ 	// Final shadow transform = position/orientation * tocamera translation
+ 	rmt::Matrix shadowTransform( *mpShadowMatrix );
+diff --git a/code/render/RenderManager/WorldRenderLayer.cpp b/code/render/RenderManager/WorldRenderLayer.cpp
+index b8a518c7..7ef47256 100644
+--- a/code/render/RenderManager/WorldRenderLayer.cpp
++++ b/code/render/RenderManager/WorldRenderLayer.cpp
+@@ -564,7 +564,7 @@ void WorldRenderLayer::Render()
+             // entering or displaying pause; normal gameplay remains unchanged.
+             const bool pauseFrame=GetGameFlow()->GetCurrentContext()==CONTEXT_PAUSE ||
+                                   GetGameFlow()->GetNextContext()==CONTEXT_PAUSE;
+-            const bool csmAllowed=SharOpenXR::IsCsmEnabled() && !pauseFrame;
++            const bool csmAllowed=SharOpenXR::AreCsmShadowsDrawn() && !pauseFrame;
+             // Old tree/light-pool shadows are ordinary named geometries, not
+             // always calls to DisplaySimpleShadow. Suppress them for the
+             // complete frame so neither the colour pass nor a cascade sees
+diff --git a/code/sound/listener.cpp b/code/sound/listener.cpp
+index 559cb113..a2c7a6f1 100644
+--- a/code/sound/listener.cpp
++++ b/code/sound/listener.cpp
+@@ -31,6 +31,9 @@
+ #include <camera/supercam.h>
+ #include <worldsim/avatarmanager.h>
+ #include <mission/gameplaymanager.h>
++#if defined(RAD_ANDROID) || defined(SRR2_OPENXR_PLATFORM_WIN32)
++#include <vr/openxrmanager.h>
++#endif
+ 
+ 
+ //******************************************************************************
+@@ -185,6 +188,23 @@ void Listener::Update( ContextEnum context )
+         camera->GetCameraUp( &up );
+         up.NormalizeSafe();
+ 
++#if defined(RAD_ANDROID) || defined(SRR2_OPENXR_PLATFORM_WIN32)
++        //
++        // In a headset the picture turns with the player's head, so the ears must too. The game
++        // camera only carries the body's heading (VR mode) or the chase camera's (Original mode),
++        // which left a character straight ahead sounding off to one side after a head turn.
++        //
++        rmt::Matrix tracked;
++        if( SharOpenXR::GetLatestCullingCamera( &tracked ) )
++        {
++            position = tracked.Row( 3 );
++            heading = tracked.Row( 2 );
++            heading.NormalizeSafe();
++            up = tracked.Row( 1 );
++            up.NormalizeSafe();
++        }
++#endif
++
+         //
+         // We don't want the position to get too far away from the character, so clamp
+         // the distance to some arbitrary maximum
+diff --git a/code/vr/openxr_desktop_runtime.cpp b/code/vr/openxr_desktop_runtime.cpp
+index a8b48558..e955450a 100644
+--- a/code/vr/openxr_desktop_runtime.cpp
++++ b/code/vr/openxr_desktop_runtime.cpp
+@@ -36,6 +36,11 @@
+ #include <cmath>
+ #include <cstring>
+ #include <vector>
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++// visionOS has no OpenXR runtime: its CompositorServices core replaces the OpenXR internals
++// below and keeps the Desktop:: names the facade after them uses.
++#include <vr/visionos/visionos_desktop_core.inl>
++#else
+ namespace SharOpenXR { namespace Desktop { namespace {
+ void* loader=NULL; PFN_xrGetInstanceProcAddr getProc=NULL;
+ XrInstance instance=XR_NULL_HANDLE; XrSystemId system=XR_NULL_SYSTEM_ID;
+@@ -427,6 +432,7 @@ void EndFrame(){if(!frameActive)return;if(eyeActive)EndEye(currentEye);if(imageA
+      widths,heights,&sharedFrame,UpdateSharedHudIrisAlpha(),colorScaleBiasEnabled);
+  if(XR_FAILED(endResult))SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,"PCVR: shared xrEndFrame failed (%d)",static_cast<int>(endResult));else if((frameSerial%120u)==1u)SDL_Log("PCVR submit: serial=%llu image=%u end=XR_SUCCESS",static_cast<unsigned long long>(frameSerial),currentImage);frameActive=false;}
+ } }
++#endif
+ 
+ namespace SharOpenXR
+ {
+@@ -466,6 +472,10 @@ bool IsMultiviewAvailable()
+  // advertises this after enabling it on the OpenXR-created logical device.
+  // Desktop must use the same capability-driven path as Quest; a dual-pass
+  // fallback is for GPUs that genuinely do not expose the feature.
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++ // The window's scene mirror has each eye's HUD over its own background: two passes.
++ if(GetVulkanContext().IsWindowMirrorOnly()) return false;
++#endif
+  return GetVulkanContext().IsMultiviewSupported();
+ }
+ bool IsMultiviewRendering() { return Desktop::multiviewRendering&&Desktop::multiviewTargetActive; }
+@@ -542,6 +552,30 @@ void SetDeveloperMenusEnabled(bool enabled) { SetSharedDeveloperMenusEnabled(ena
+ bool IsDeveloperMenusEnabled() { return GetSharedVrState().developerMenusEnabled; }
+ void SetCsmEnabled(bool enabled) { SetSharedCsmEnabled(enabled); }
+ bool IsCsmEnabled() { return GetSharedVrState().csmEnabled; }
++bool AreCsmShadowsDrawn()
++{
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++ if(GetVulkanContext().IsWindowMirrorOnly()) return false;
++#endif
++ return IsCsmEnabled();
++}
++bool IsSceneMirrorUp()
++{
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++ return GetVulkanContext().IsWindowMirrorOnly();
++#else
++ return false;
++#endif
++}
++float GroundShadowOffset(float gameOffset,float mirrorOffset)
++{
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++ if(GetVulkanContext().IsWindowMirrorOnly()) return gameOffset<mirrorOffset?gameOffset:mirrorOffset;
++#else
++ (void)mirrorOffset;
++#endif
++ return gameOffset;
++}
+ void SetEnhancedMaterialsEnabled(bool enabled) { SetSharedEnhancedMaterialsEnabled(enabled); }
+ bool IsEnhancedMaterialsEnabled() { return GetSharedVrState().enhancedMaterialsEnabled; }
+ void SetCustomMaterialsEnabled(bool enabled) { SetSharedCustomMaterialsEnabled(enabled); }
+@@ -599,10 +633,22 @@ bool IsVehicleGripToggleEnabled() { return GetSharedVrState().vehicleGripToggleE
+ bool IsHorizontalMenuInputDominant() { return Desktop::menuHorizontalInputDominant; }
+ bool IsVerticalMenuInputDominant() { return Desktop::menuVerticalInputDominant; }
+ void SetVrBaseHeading(const rmt::Vector& heading) { SharedVrState& s=GetSharedVrState();s.vrBaseHeading=heading;s.vrBaseHeading.y=0.0f;s.vrBaseHeadingValid=s.vrBaseHeading.NormalizeSafe()>0.0001f; }
++static float gPendingVrYaw=0.0f;
++void AddVrYaw(float radians) { gPendingVrYaw+=radians; }
++float ConsumeVrYaw() { const float yaw=gPendingVrYaw; gPendingVrYaw=0.0f; return yaw; }
+ bool ConsumeRoomscaleMovement(rmt::Vector* delta) { Character* p=GetCharacterManager()?GetCharacterManager()->GetCharacter(0):NULL;return ConsumeSharedRoomscale(Desktop::currentViews,Desktop::currentViewFlags,&Desktop::origin,Desktop::originValid,p&&p->IsInCar(),delta); }
+ bool GetPhysicalHeadHeight(float* height) { Character* p=GetCharacterManager()?GetCharacterManager()->GetCharacter(0):NULL;const bool child=p&&(p->GetUID()==tEntity::MakeUID("bart")||p->GetUID()==tEntity::MakeUID("lisa"));return GetSharedPhysicalHeadHeight(Desktop::origin,Desktop::originValid,Desktop::usingStageSpace,GetSharedVrState().seatedMode,child,height); }
+ bool RecenterVrPose() { if(!RecenterSharedTracking(Desktop::currentViews,Desktop::currentViewFlags,&Desktop::origin))return false;Desktop::originValid=true;GetSharedVrMenu().InvalidateAnchor();return true; }
+ bool GetHeadForward(rmt::Vector* forward) { return GetSharedHeadForward(Desktop::currentViews,Desktop::origin,Desktop::originValid,forward); }
++bool GetControllerForward(unsigned hand,rmt::Vector* forward) { return hand<2&&GetSharedControllerForward(Desktop::origin,Desktop::originValid,Desktop::handPoses[hand],Desktop::handPoseValid[hand],forward); }
++void SetMoveDirection(int direction) { SetSharedMoveDirection(direction); }
++int GetMoveDirection() { return GetSharedVrState().moveDirection; }
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++void SetAntiAliasing(int mode) { SetSharedAntiAliasing(mode); }
++int GetAntiAliasing() { return GetSharedVrState().antiAliasing; }
++void SetViewMode(int mode) { SetSharedViewMode(mode); }
++int GetViewMode() { return GetSharedVrState().viewMode; }
++#endif
+ bool GetControllerLocalPose(unsigned hand,rmt::Matrix* out) { return SharedRender::ComposeControllerLocalPose(Desktop::origin,Desktop::originValid,Desktop::handPoses,Desktop::handPoseValid,hand,out); }
+ bool GetControllerWorldPose(unsigned hand,tCamera* base,rmt::Matrix* out) { if(!base)return false;return SharedRender::ComposeControllerWorldPose(Desktop::origin,Desktop::originValid,Desktop::handPoses,Desktop::handPoseValid,hand,base->GetCameraToWorldMatrix(),out); }
+ void RenderControllerHands(tCamera*)
+diff --git a/code/vr/openxr_shared_hud.cpp b/code/vr/openxr_shared_hud.cpp
+index 3fdb8b1b..6f9b1b18 100644
+--- a/code/vr/openxr_shared_hud.cpp
++++ b/code/vr/openxr_shared_hud.cpp
+@@ -880,6 +880,26 @@ void SetRadarAuthoredRect(int xMin,int yMin,int xMax,int yMax)
+ }
+ 
+ #if 1
++// The Original HUD's canvas: 0.72 m tall, 0.9 m ahead of the head and a little below it. In
++// visionOS's shared-space window it fills the picture's height instead, as the game's own 4:3 HUD
++// does on a screen, 4 m out where the stereo pair converges, so it sits flat on the window;
++// `scale` says how much bigger than the headset's canvas that is.
++static void OriginalHudCanvas(rmt::Matrix* anchor,float* scale)
++{
++    rmt::Matrix headCamera=g.cullingBaseCamera;
++    GetLatestCullingCamera(&headCamera);
++    *anchor=headCamera;
++    if(GetSharedVrState().flatWindowActive)
++    {
++        const float distance=4.0f;
++        *scale=2.0f*distance*GetSharedVrState().flatWindowTangent/0.72f;
++        anchor->Row(3)=headCamera.Row(3)+headCamera.Row(2)*distance;
++        return;
++    }
++    *scale=1.0f;
++    anchor->Row(3)=headCamera.Row(3)+headCamera.Row(2)*0.90f-headCamera.Row(1)*0.18f;
++}
++
+ static void DrawRadarPlane()
+ {
+     // While the authored full-page HUD is active, its separately captured
+@@ -916,7 +936,10 @@ static void DrawRadarPlane()
+         const float x1=std::min(640.0f,g.radarRect[2]+margin);
+         const float y1=std::min(480.0f,g.radarRect[3]+margin);
+         // Match the full 0.72 m / 480 px authored HUD canvas exactly.
+-        const float metresPerPixel=0.0015f;
++        rmt::Matrix anchor;
++        float canvasScale=1.0f;
++        OriginalHudCanvas(&anchor,&canvasScale);
++        const float metresPerPixel=0.0015f*canvasScale;
+         const float left=(x0-320.0f)*metresPerPixel;
+         const float right=(x1-320.0f)*metresPerPixel;
+         // DrawVulkanHudQuad flips the full offscreen HUD texture vertically.
+@@ -924,11 +947,6 @@ static void DrawRadarPlane()
+         // is upright but its plane is placed above the frame rendered below.
+         const float bottom=(y0-240.0f)*metresPerPixel;
+         const float top=(y1-240.0f)*metresPerPixel;
+-        rmt::Matrix headCamera=g.cullingBaseCamera;
+-        GetLatestCullingCamera(&headCamera);
+-        rmt::Matrix anchor=headCamera;
+-        anchor.Row(3)=headCamera.Row(3)+headCamera.Row(2)*0.90f-
+-                      headCamera.Row(1)*0.18f;
+         const rmt::Matrix eyeLocal=PoseToGame(RelativePose(g.origin,eye.view.pose));
+         rmt::Matrix eyeWorld,worldToEye,anchorToEye,projection,mvp;
+         eyeWorld.Mult(eyeLocal,g.cullingBaseCamera);
+@@ -1292,13 +1310,12 @@ static void DrawGameplayHud()
+         // Map0 is the background of Radar0. Draw it first, then composite the
+         // complete authored HUD so its frame and markers cover the map edge.
+         DrawRadarPlane();
+-        rmt::Matrix anchor=g.cullingBaseCamera;
+-        GetLatestCullingCamera(&anchor);
+-        anchor.Row(3)=anchor.Row(3)+anchor.Row(2)*0.90f-
+-                      anchor.Row(1)*0.18f;
++        rmt::Matrix anchor;
++        float canvasScale=1.0f;
++        OriginalHudCanvas(&anchor,&canvasScale);
+         const float uv[4]={0.0f,0.0f,1.0f,1.0f};
+         DrawMissionHudQuad(g.vulkanGameplayHudDescriptor,uv,anchor,
+-                           0.72f,4.0f/3.0f,g.eyes[g.activeEye-1]);
++                           0.72f*canvasScale,4.0f/3.0f,g.eyes[g.activeEye-1]);
+         return;
+     }
+     DrawRadarPlane();
+diff --git a/code/vr/openxr_shared_menu.cpp b/code/vr/openxr_shared_menu.cpp
+index ce62ae75..147122fb 100644
+--- a/code/vr/openxr_shared_menu.cpp
++++ b/code/vr/openxr_shared_menu.cpp
+@@ -1,5 +1,6 @@
+ #include <vr/openxr_shared_menu.h>
+ #include <vr/openxr_shared_render.h>
++#include <vr/openxr_shared_state.h>
+ 
+ namespace SharOpenXR
+ {
+@@ -79,7 +80,13 @@ bool SharedMoviePanel::GetProjection(bool eyeActive,const XrView& eye,int width,
+     int height,rmt::Matrix* projection,int* targetWidth,int* targetHeight) const
+ {
+     if(!mActive||!mAnchorValid||!eyeActive||!projection||!targetWidth||!targetHeight)return false;
+-    SharedRender::ComposeWorldLockedPanel(mAnchor,eye.pose,eye.fov,1.0f,1.0f,1.0f,projection);
++    // In visionOS's window the view is 72 degrees across, not a headset's, so the unit canvas (a
++    // 90 degree panel half a metre out) would be cropped. There it fills the window's height 4 m
++    // out, the stereo pair's convergence, where it sits flat on the window.
++    if(GetSharedVrState().flatWindowActive)
++        SharedRender::ComposeWorldLockedPanel(mAnchor,eye.pose,eye.fov,4.36f,4.36f,8.0f,projection);
++    else
++        SharedRender::ComposeWorldLockedPanel(mAnchor,eye.pose,eye.fov,1.0f,1.0f,1.0f,projection);
+     *targetWidth=width;*targetHeight=height;return true;
+ }
+ SharedMoviePanel& GetSharedMoviePanel(){static SharedMoviePanel panel;return panel;}
+diff --git a/code/vr/openxr_shared_menu.h b/code/vr/openxr_shared_menu.h
+index c32701e9..fa89a97f 100644
+--- a/code/vr/openxr_shared_menu.h
++++ b/code/vr/openxr_shared_menu.h
+@@ -18,6 +18,8 @@ public:
+     void SetActive(bool active);
+     void SetRendering(bool rendering,bool eyeActive,const XrView views[2]);
+     bool IsRendering() const;
++    // Whether the frontend panel is up (it has a place in the room).
++    bool IsActive() const { return mActive && mAnchorValid; }
+     bool GetProjection(bool eyeActive,const XrView& eye,int width,int height,
+                        rmt::Matrix* projection,int* targetWidth,
+                        int* targetHeight,bool requireRendering=true) const;
+diff --git a/code/vr/openxr_shared_settings.cpp b/code/vr/openxr_shared_settings.cpp
+index f7088a6f..25552f2a 100644
+--- a/code/vr/openxr_shared_settings.cpp
++++ b/code/vr/openxr_shared_settings.cpp
+@@ -74,6 +74,9 @@ void LoadVrSettings()
+         else if(!std::strcmp(key,"vehicleComfort"))ReadBool(value,s.vehicleComfortEnabled);
+         else if(!std::strcmp(key,"bodyIK"))ReadBool(value,s.bodyIkEnabled);
+         else if(!std::strcmp(key,"vehicleGripToggle"))ReadBool(value,s.vehicleGripToggleEnabled);
++        else if(!std::strcmp(key,"moveDirection"))ReadInt(value,s.moveDirection,0,1);
++        else if(!std::strcmp(key,"antiAliasing"))ReadInt(value,s.antiAliasing,0,2);
++        else if(!std::strcmp(key,"view"))ReadInt(value,s.viewMode,0,2);
+     }
+     std::fclose(file);
+     if(s.volumetricLightEnabled) s.hdrEnabled=true;
+@@ -92,7 +95,8 @@ bool SaveVrSettings()
+         "enhancedMaterials=%d\ngtao=%d\nrenderScale=%.3f\nrefreshRate=%.0f\n"
+         "vrSteeringWheel=%d\nvehicleLights=%d\nspatialHud=%d\ndeveloperMenus=%d\n"
+         "materialModel=%d\nreflectionMode=%d\npbrDebugMode=%d\ngiIndirectOnly=%d\ncustomMaterials=%d\n"
+-        "vehicleComfort=%d\nbodyIK=%d\nvehicleGripToggle=%d\nvolumetricLight=%d\nhdr=%d\n",
++        "vehicleComfort=%d\nbodyIK=%d\nvehicleGripToggle=%d\nvolumetricLight=%d\nhdr=%d\n"
++        "moveDirection=%d\nantiAliasing=%d\nview=%d\n",
+         s.vrModeEnabled?1:0,s.seatedMode?1:0,s.snapTurnEnabled?1:0,
+         s.smoothTurnSpeed,s.snapTurnAngle,s.csmEnabled?1:0,
+         s.enhancedMaterialsEnabled?1:0,s.gtaoEnabled?1:0,s.renderScale,s.refreshRate,
+@@ -101,7 +105,8 @@ bool SaveVrSettings()
+         s.pbrDebugMode,s.giIndirectOnly?1:0,s.customMaterialsEnabled?1:0,
+         s.vehicleComfortEnabled?1:0,s.bodyIkEnabled?1:0,
+         s.vehicleGripToggleEnabled?1:0,
+-        s.volumetricLightEnabled?1:0,s.hdrEnabled?1:0);
++        s.volumetricLightEnabled?1:0,s.hdrEnabled?1:0,
++        s.moveDirection,s.antiAliasing,s.viewMode);
+     const bool ok=std::fclose(file)==0;
+ 
+     // Continue writing the legacy one-byte file for older builds.
+@@ -159,6 +164,9 @@ bool IsSharedSpatialHudEnabled()
+     const SharedVrState& s=GetSharedVrState();return s.vrModeEnabled&&s.spatialHudEnabled;
+ }
+ void SetSharedDeveloperMenusEnabled(bool value){GetSharedVrState().developerMenusEnabled=value;SaveVrSettings();}
++void SetSharedMoveDirection(int value){GetSharedVrState().moveDirection=std::max(0,std::min(1,value));SaveVrSettings();}
++void SetSharedAntiAliasing(int value){GetSharedVrState().antiAliasing=std::max(0,std::min(2,value));SaveVrSettings();}
++void SetSharedViewMode(int value){GetSharedVrState().viewMode=std::max(0,std::min(2,value));SaveVrSettings();}
+ void SetSharedSeatedMode(bool value){GetSharedVrState().seatedMode=value;SaveVrSettings();}
+ void SetSharedSnapTurnEnabled(bool value){GetSharedVrState().snapTurnEnabled=value;SaveVrSettings();}
+ void SetSharedSmoothTurnSpeed(float value){GetSharedVrState().smoothTurnSpeed=value;SaveVrSettings();}
+diff --git a/code/vr/openxr_shared_settings.h b/code/vr/openxr_shared_settings.h
+index 9bc6acd7..b72d9a86 100644
+--- a/code/vr/openxr_shared_settings.h
++++ b/code/vr/openxr_shared_settings.h
+@@ -16,6 +16,9 @@ void SetSharedVehicleControlMode(int mode);
+ bool IsSharedSpatialHudEnabled();
+ void SetSharedDeveloperMenusEnabled(bool enabled);
+ void SetSharedSeatedMode(bool enabled);
++void SetSharedMoveDirection(int direction);
++void SetSharedAntiAliasing(int mode);
++void SetSharedViewMode(int mode);
+ void SetSharedSnapTurnEnabled(bool enabled);
+ void SetSharedSmoothTurnSpeed(float value);
+ void SetSharedSnapTurnAngle(float value);
+diff --git a/code/vr/openxr_shared_state.cpp b/code/vr/openxr_shared_state.cpp
+index 4bc36b40..bde67677 100644
+--- a/code/vr/openxr_shared_state.cpp
++++ b/code/vr/openxr_shared_state.cpp
+@@ -23,7 +23,15 @@ SharedVrState::SharedVrState()
+       wheelAdjustHoldSec(0.0f),activeWheelCentre(0.0f,-0.32f,0.52f),
+       activeYokeAnchor(0.0f,-0.33f,0.40f),activeWheelYaw(0.0f),
+       activeWheelPitch(0.0f),activeWheelRadius(0.18f),wheelMeshHidden(false),
+-      vehicleGripToggleEnabled(false),vehicleBodyAnchorValid(false)
++      vehicleGripToggleEnabled(false),vehicleBodyAnchorValid(false),
++      moveDirection(0),
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++      // SMAA: on Vision Pro it costs well under a millisecond at the headset's eye size.
++      antiAliasing(2),
++#else
++      antiAliasing(0),
++#endif
++      viewMode(0),flatWindowActive(false),flatWindowTangent(0.4087f)
+ {
+     vehicleBodyAnchorWorld.Identity();
+     vehicleBodyCameraWorld.Identity();
+diff --git a/code/vr/openxr_shared_state.h b/code/vr/openxr_shared_state.h
+index 97496cb9..11a770a4 100644
+--- a/code/vr/openxr_shared_state.h
++++ b/code/vr/openxr_shared_state.h
+@@ -63,6 +63,18 @@ struct SharedVrState
+     bool vehicleBodyAnchorValid;
+     rmt::Matrix vehicleBodyAnchorWorld;
+     rmt::Matrix vehicleBodyCameraWorld;
++    // On foot, the left stick moves relative to the head (0) or the left controller (1).
++    int moveDirection;
++    // visionOS: anti-aliasing (0 off, 1 FXAA, 2 SMAA) and the view (0 full immersion, 1 progressive,
++    // 2 a window in the shared space).
++    int antiAliasing;
++    int viewMode;
++    // visionOS, set by its backend each frame: the game is in its shared-space window, seen from
++    // eyes placed for the window, 4 m from it, rather than from the tracked head.
++    bool flatWindowActive;
++    // The window's half-height as a view tangent. Its picture is rendered wider than the window
++    // (the eye frustum's own angles), so layout that fills the window uses this.
++    float flatWindowTangent;
+ 
+     SharedVrState();
+ };
+diff --git a/code/vr/openxr_shared_tracking.cpp b/code/vr/openxr_shared_tracking.cpp
+index 5e4ef807..87b61634 100644
+--- a/code/vr/openxr_shared_tracking.cpp
++++ b/code/vr/openxr_shared_tracking.cpp
+@@ -84,4 +84,14 @@ bool GetSharedHeadForward(const XrView views[2],const XrPosef& origin,bool valid
+     SharedVrState& s=GetSharedVrState();if(s.vrBaseHeadingValid){rmt::Matrix base;base.Identity();base.FillHeading(s.vrBaseHeading,rmt::Vector(0,1,0));forward->Transform(base);}
+     return forward->MagnitudeSqr()>.0001f&&forward->NormalizeSafe();
+ }
++// The heading a controller points along, in the same space as GetSharedHeadForward's. YawOnly
++// flattens it, falling back to the controller's right axis when it points straight up or down.
++bool GetSharedControllerForward(const XrPosef& origin,bool valid,const XrPosef& handPose,bool handValid,rmt::Vector* forward)
++{
++    if(!forward||!valid||!handValid)return false;
++    const XrQuaternionf yaw=SharedRender::YawOnly(SharedRender::RelativePose(origin,handPose).orientation);
++    const XrVector3f f=SharedRender::Rotate(yaw,XrVector3f{0,0,-1});forward->Set(f.x,0,-f.z);
++    SharedVrState& s=GetSharedVrState();if(s.vrBaseHeadingValid){rmt::Matrix base;base.Identity();base.FillHeading(s.vrBaseHeading,rmt::Vector(0,1,0));forward->Transform(base);}
++    return forward->MagnitudeSqr()>.0001f&&forward->NormalizeSafe();
++}
+ }
+diff --git a/code/vr/openxr_shared_tracking.h b/code/vr/openxr_shared_tracking.h
+index d0c3aa5b..7e5acc7f 100644
+--- a/code/vr/openxr_shared_tracking.h
++++ b/code/vr/openxr_shared_tracking.h
+@@ -29,6 +29,8 @@ bool GetSharedPhysicalHeadHeight(const XrPosef& origin,bool originValid,
+     bool stageSpace,bool seatedMode,bool childCharacter,float* height);
+ bool GetSharedHeadForward(const XrView views[2],const XrPosef& origin,
+     bool originValid,rmt::Vector* forward);
++bool GetSharedControllerForward(const XrPosef& origin,bool originValid,
++    const XrPosef& handPose,bool handPoseValid,rmt::Vector* forward);
+ }
+ #endif
+ #endif
+diff --git a/code/vr/openxrmanager.cpp b/code/vr/openxrmanager.cpp
+index cc8a587c..fc142e4d 100644
+--- a/code/vr/openxrmanager.cpp
++++ b/code/vr/openxrmanager.cpp
+@@ -805,6 +805,9 @@ void SetSnapTurnAngle(float value){ SetSharedSnapTurnAngle(value); }
+ float GetSnapTurnAngle(){ return g.snapTurnAngle; }
+ void SetCsmEnabled(bool enabled){ SetSharedCsmEnabled(enabled); }
+ bool IsCsmEnabled(){ return g.csmEnabled; }
++bool AreCsmShadowsDrawn(){ return g.csmEnabled; }
++float GroundShadowOffset(float gameOffset,float){ return gameOffset; }
++bool IsSceneMirrorUp(){ return false; }
+ void SetEnhancedMaterialsEnabled(bool enabled){ SetSharedEnhancedMaterialsEnabled(enabled); }
+ bool IsEnhancedMaterialsEnabled(){ return g.enhancedMaterialsEnabled; }
+ void SetCustomMaterialsEnabled(bool enabled){ SetSharedCustomMaterialsEnabled(enabled); }
+@@ -909,6 +912,9 @@ void SetVrBaseHeading(const rmt::Vector& heading)
+     g.vrBaseHeading.y=0.0f;
+     g.vrBaseHeadingValid=g.vrBaseHeading.NormalizeSafe()>0.0001f;
+ }
++static float gPendingVrYaw=0.0f;
++void AddVrYaw(float radians){ gPendingVrYaw+=radians; }
++float ConsumeVrYaw(){ const float yaw=gPendingVrYaw; gPendingVrYaw=0.0f; return yaw; }
+ bool RecenterVrPose()
+ {
+     const XrView views[2]={g.eyes[0].view,g.eyes[1].view};
+@@ -955,6 +961,13 @@ bool GetHeadForward(rmt::Vector* forward)
+     const XrView views[2]={g.eyes[0].view,g.eyes[1].view};
+     return GetSharedHeadForward(views,g.origin,g.originValid,forward);
+ }
++bool GetControllerForward(unsigned hand,rmt::Vector* forward)
++{
++    return hand<2&&GetSharedControllerForward(g.origin,g.originValid,g.handPoses[hand],
++        g.handPoseValid[hand],forward);
++}
++void SetMoveDirection(int direction){ SetSharedMoveDirection(direction); }
++int GetMoveDirection(){ return GetSharedVrState().moveDirection; }
+ bool Initialize()
+ {
+     SetSharedHudRuntimeProvider(FillSharedHudRuntime);
+diff --git a/code/vr/openxrmanager.h b/code/vr/openxrmanager.h
+index dde9310b..7a47e7ff 100644
+--- a/code/vr/openxrmanager.h
++++ b/code/vr/openxrmanager.h
+@@ -96,6 +96,11 @@ namespace SharOpenXR
+     void SetDeveloperMenusEnabled(bool enabled);
+     bool IsDeveloperMenusEnabled();
+     void SetVrBaseHeading(const rmt::Vector& heading);
++    // A turn for the first-person camera to make, as a stick turn does (radians, positive to the
++    // right), taken by its next update: the visionOS runtime turns the game to keep what the
++    // player looks at in front of the progressive portal.
++    void AddVrYaw(float radians);
++    float ConsumeVrYaw();
+     bool RecenterVrPose();
+     bool GetPhysicalHeadHeight(float* heightMetres);
+     bool ConsumeRoomscaleMovement(rmt::Vector* worldDelta);
+@@ -109,6 +114,19 @@ namespace SharOpenXR
+     float GetSnapTurnAngle();
+     void SetCsmEnabled(bool enabled);
+     bool IsCsmEnabled();
++    // Whether the sun's shadow cascades are drawn this frame: the setting, except while the window's
++    // scene mirror is up (visionOS), which draws none and keeps the game's own ground shadows.
++    bool AreCsmShadowsDrawn();
++    // How far a ground decal (a prop's shadow or light pool, a skid mark) is lifted so the ground
++    // doesn't cut it: the game's distance (`gameOffset`), or no more than `mirrorOffset` while the
++    // window's scene mirror is up (visionOS). The game lifts them a long way (a prop's shadow 1 m
++    // towards its camera) and draws them before what stands in them, which then covers the lifted
++    // part; the mirror draws them after, from the viewer's own eyes, so they darkened the legs of
++    // whoever stood in them, and floated. (Character and car shadows go just off the ground.)
++    float GroundShadowOffset(float gameOffset, float mirrorOffset);
++    // Whether the window's scene mirror (visionOS) is up: the scene is seen from the viewer's own
++    // eyes, in front of the window, rather than from the game's camera.
++    bool IsSceneMirrorUp();
+     void SetEnhancedMaterialsEnabled(bool enabled);
+     bool IsEnhancedMaterialsEnabled();
+     void SetCustomMaterialsEnabled(bool enabled);
+@@ -151,6 +169,15 @@ namespace SharOpenXR
+     bool IsVerticalMenuInputDominant();
+     bool IsRightEyeRendering();
+     bool GetHeadForward(rmt::Vector* forward);
++    bool GetControllerForward(unsigned hand, rmt::Vector* forward);
++    void SetMoveDirection(int direction);
++    int GetMoveDirection();
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    void SetAntiAliasing(int mode);
++    int GetAntiAliasing();
++    void SetViewMode(int mode);
++    int GetViewMode();
++#endif
+     bool GetControllerWorldPose(unsigned hand, tCamera* baseCamera,
+                                 rmt::Matrix* controllerToWorld);
+     bool GetHandWorldPosition(unsigned hand, rmt::Vector* outPosition);
+diff --git a/code/vr/vulkan/hdr_pipeline.cpp b/code/vr/vulkan/hdr_pipeline.cpp
+index 42e00e86..879a97b0 100644
+--- a/code/vr/vulkan/hdr_pipeline.cpp
++++ b/code/vr/vulkan/hdr_pipeline.cpp
+@@ -428,6 +428,14 @@ bool VulkanContext::ResolveHdrTargets() {
+             }
+         }
+         float* exposure=static_cast<float*>(t.meterMapped);
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++        // A metering frame (SetWindowMetering): the meter steps from the window's exposure.
++        const bool windowHudOnly=mWindowMirrorOnly && t.output==mWindowCaptureOutput;
++        if(windowHudOnly && mWindowMetering && (t.layers==2 || t.layer==0)) {
++            exposure[0]=mWindowMeterSeed=mWindowExposure;
++            mWindowMeterOutput=t.output; mWindowMeterAge=0;
++        }
++#endif
+         const bool volumetricEnabled=SharOpenXR::IsVolumetricLightEnabled();
+         // value[14].y is outside the exposure compute shader's two-eye state
+         // and is consumed only by the HDR resolve shader.
+@@ -495,7 +503,12 @@ bool VulkanContext::ResolveHdrTargets() {
+         vkCmdPipelineBarrier(mCommandBuffer,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT|VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+             0,0,nullptr,1,&exposureBarrier,0,nullptr);
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++        // A metering frame's fog would go unseen.
++        if(volumetricEnabled && !windowHudOnly) {
++#else
+         if(volumetricEnabled) {
++#endif
+         VkImageMemoryBarrier froxelBarrier={VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+         froxelBarrier.srcQueueFamilyIndex=froxelBarrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+         froxelBarrier.image=t.froxel;
+@@ -534,6 +547,17 @@ bool VulkanContext::ResolveHdrTargets() {
+             VkRenderPassBeginInfo begin={VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+             begin.renderPass=t.pass; begin.framebuffer=t.framebuffers[eye]; begin.renderArea.extent={t.width,t.height};
+             vkCmdBeginRenderPass(mCommandBuffer,&begin,VK_SUBPASS_CONTENTS_INLINE);
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++            if(windowHudOnly) {
++                VkClearAttachment clear={VK_IMAGE_ASPECT_COLOR_BIT,0,{}};
++                const float background=(t.layers==2?eye:t.layer)==1?1.0f:0.0f;
++                clear.clearValue.color={{background,background,background,1.0f}};
++                VkClearRect rect={{{0,0},{t.width,t.height}},0,1};
++                vkCmdClearAttachments(mCommandBuffer,1,&clear,1,&rect);
++                vkCmdEndRenderPass(mCommandBuffer);
++                continue;
++            }
++#endif
+             vkCmdBindPipeline(mCommandBuffer,VK_PIPELINE_BIND_POINT_GRAPHICS,t.pipeline);
+             vkCmdBindDescriptorSets(mCommandBuffer,VK_PIPELINE_BIND_POINT_GRAPHICS,t.layout,0,1,&t.descriptor,0,nullptr);
+             float constants[32]; std::memcpy(constants,t.projection[eye],64);
+@@ -550,6 +574,10 @@ bool VulkanContext::ResolveHdrTargets() {
+             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT|VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|
+             VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,0,0,nullptr,0,nullptr,2,barriers);
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++        if(t.output==mWindowCaptureOutput && mWindowCaptureImage && (t.layers==2 || t.layer<2) && !windowHudOnly)
++            CaptureWindowScene(t,depth->image);
++#endif
+         t.active=false;
+         mHdrResolvedOutputs.insert(t.output);
+         EndActiveRenderPass();
+@@ -595,5 +623,206 @@ void VulkanContext::DestroyHdrTargets() {
+     mLdrOffscreenTargets.clear();
+     mHdrResolvedOutputs.clear();
+ }
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++// Targets are found by output image and hold views of it, so one left behind for a destroyed image
++// would be matched by a new image that reuses its handle, and render through dangling views. Each
++// also has its own eye-sized images, with draw states and a depth target cached against them.
++// Called with the queue drained. Views and images go through the deferred lists, which release
++// every view before any image.
++void VulkanContext::DestroyHdrTargetsFor(VkImage output) {
++    for(size_t i=0;i<mHdrTargets.size();) {
++        HdrTarget& t=mHdrTargets[i];
++        if(t.output!=output) { ++i; continue; }
++        RetireRenderTarget(t.colour);
++        if(t.pipeline) vkDestroyPipeline(mDevice,t.pipeline,nullptr);
++        if(t.volumePipeline) vkDestroyPipeline(mDevice,t.volumePipeline,nullptr);
++        if(t.exposurePipeline) vkDestroyPipeline(mDevice,t.exposurePipeline,nullptr);
++        if(t.froxelPipeline) vkDestroyPipeline(mDevice,t.froxelPipeline,nullptr);
++        if(t.layout) vkDestroyPipelineLayout(mDevice,t.layout,nullptr);
++        if(t.exposureLayout) vkDestroyPipelineLayout(mDevice,t.exposureLayout,nullptr);
++        if(t.froxelLayout) vkDestroyPipelineLayout(mDevice,t.froxelLayout,nullptr);
++        for(auto f:t.framebuffers) if(f) vkDestroyFramebuffer(mDevice,f,nullptr);
++        for(auto f:t.volumeFramebuffers) if(f) vkDestroyFramebuffer(mDevice,f,nullptr);
++        if(t.pass) vkDestroyRenderPass(mDevice,t.pass,nullptr);
++        if(t.volumePass) vkDestroyRenderPass(mDevice,t.volumePass,nullptr);
++        if(t.pool) vkDestroyDescriptorPool(mDevice,t.pool,nullptr);
++        if(t.setLayout) vkDestroyDescriptorSetLayout(mDevice,t.setLayout,nullptr);
++        if(t.sampler) vkDestroySampler(mDevice,t.sampler,nullptr);
++        if(t.volumeSampler) vkDestroySampler(mDevice,t.volumeSampler,nullptr);
++        if(t.froxelSampler) vkDestroySampler(mDevice,t.froxelSampler,nullptr);
++        if(t.fallbackShadowSampler) vkDestroySampler(mDevice,t.fallbackShadowSampler,nullptr);
++        if(t.meterMapped) vkUnmapMemory(mDevice,t.meterMemory);
++        if(t.meterBuffer) vkDestroyBuffer(mDevice,t.meterBuffer,nullptr);
++        if(t.meterMemory) vkFreeMemory(mDevice,t.meterMemory,nullptr);
++        for(auto v:t.outputViews) if(v) mDeferredViews.push_back(v);
++        const VkImageView views[]={t.depthView,t.colourView,t.volumeView,t.froxelView};
++        for(auto v:views) if(v) mDeferredViews.push_back(v);
++        const VkImage images[]={t.colour,t.volume,t.froxel};
++        for(auto image:images) if(image) mDeferredImages.push_back(image);
++        const VkDeviceMemory memory[]={t.memory,t.volumeMemory,t.froxelMemory};
++        for(auto m:memory) if(m) mDeferredImageMemory.push_back(m);
++        mHdrTargets.erase(mHdrTargets.begin()+i);
++    }
++    mHdrResolvedOutputs.erase(output);
++}
++float VulkanContext::UpdateWindowExposure(float seconds) {
++    std::lock_guard<std::recursive_mutex> lock(mGraphicsMutex);
++    // A metering frame's step, once its frame is surely done (its arena's come round again).
++    if(mWindowMeterOutput && ++mWindowMeterAge>FrameArenaCount) {
++        for(const auto& t:mHdrTargets) {
++            if(t.output!=mWindowMeterOutput || !(t.layers==2 || t.layer==0) || !t.meterMapped) continue;
++            // hdr_exposure.comp: exposure = mix(previous, target, 0.075 down or 0.035 up), and no
++            // step when it found nothing but sky.
++            const float stepped=static_cast<const float*>(t.meterMapped)[0];
++            if(stepped!=mWindowMeterSeed) {
++                const float rate=stepped<mWindowMeterSeed?0.075f:0.035f;
++                const float target=std::fmin(std::fmax(mWindowMeterSeed+(stepped-mWindowMeterSeed)/rate,0.60f),1.80f);
++                if(mWindowExposureTarget<=0.0f) mWindowExposure=target;
++                mWindowExposureTarget=target;
++            }
++            break;
++        }
++        mWindowMeterOutput=VK_NULL_HANDLE;
++    }
++    // The meter takes those steps once a swapchain image comes round, every third frame at 90 Hz:
++    // down with a time constant of 0.43 s, up with 0.94 s.
++    if(mWindowExposureTarget>0.0f) {
++        const float constant=mWindowExposureTarget<mWindowExposure?0.43f:0.94f;
++        mWindowExposure+=(mWindowExposureTarget-mWindowExposure)*(1.0f-std::exp(-seconds/constant));
++    }
++    return mWindowExposure;
++}
++void VulkanContext::SetWindowSceneCapture(VkImage output,VkImage capture) {
++    mWindowCaptureOutput=capture?output:VK_NULL_HANDLE;
++    mWindowCaptureImage=output?capture:VK_NULL_HANDLE;
++    mWindowCapturedEyes=mWindowDepthEyes=0;
++}
++bool VulkanContext::TakeWindowSceneCapture(VkImage* depth,float projection[2][16]) {
++    const bool captured=mWindowCapturedEyes==3u && mWindowDepthEyes==3u;
++    mWindowCapturedEyes=mWindowDepthEyes=0;
++    if(!captured) return false;
++    *depth=mWindowDepth;
++    std::memcpy(projection,mWindowCaptureProjection,sizeof(mWindowCaptureProjection));
++    return true;
++}
++VkImage VulkanContext::FindHdrDepth(const HdrTarget& t) {
++    for(auto& d:mDepthTargetCache) if(d.colourImage==t.colour && d.arrayLayer==t.layer) return d.image;
++    return VK_NULL_HANDLE;
++}
++// Copies the world's depth for the target's eyes (its layer, or both) into the window's own
++// 2-layer depth image, once per eye per frame.
++void VulkanContext::SnapshotWindowDepth(HdrTarget& t,VkImage depth) {
++    const uint32_t firstLayer=t.layers==2?0u:t.layer, layerCount=t.layers==2?2u:1u;
++    const uint32_t eyes=(t.layers==2?3u:1u<<t.layer)&~mWindowDepthEyes;
++    if(!eyes || firstLayer>1) return;
++    if(mWindowDepth && (mWindowDepthWidth!=t.width || mWindowDepthHeight!=t.height)) {
++        // Render Scale changed: retire the old image once this frame is done with it.
++        mDeferredImages.push_back(mWindowDepth);
++        mDeferredImageMemory.push_back(mWindowDepthMemory);
++        mWindowDepth=VK_NULL_HANDLE; mWindowDepthMemory=VK_NULL_HANDLE;
++    }
++    if(!mWindowDepth) {
++        VkImageCreateInfo di={VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
++        di.imageType=VK_IMAGE_TYPE_2D; di.format=VK_FORMAT_D24_UNORM_S8_UINT;
++        di.extent={t.width,t.height,1}; di.mipLevels=1; di.arrayLayers=2;
++        di.samples=VK_SAMPLE_COUNT_1_BIT; di.tiling=VK_IMAGE_TILING_OPTIMAL;
++        di.usage=VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
++        di.sharingMode=VK_SHARING_MODE_EXCLUSIVE; di.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;
++        VkMemoryRequirements requirements={};
++        uint32_t type=0;
++        VkMemoryAllocateInfo allocation={VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
++        if(vkCreateImage(mDevice,&di,nullptr,&mWindowDepth)!=VK_SUCCESS) { mWindowDepth=VK_NULL_HANDLE; return; }
++        vkGetImageMemoryRequirements(mDevice,mWindowDepth,&requirements);
++        allocation.allocationSize=requirements.size;
++        if(!FindMemoryType(requirements.memoryTypeBits,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,&type) ||
++           (allocation.memoryTypeIndex=type,vkAllocateMemory(mDevice,&allocation,nullptr,&mWindowDepthMemory))!=VK_SUCCESS ||
++           vkBindImageMemory(mDevice,mWindowDepth,mWindowDepthMemory,0)!=VK_SUCCESS) {
++            if(mWindowDepthMemory) vkFreeMemory(mDevice,mWindowDepthMemory,nullptr);
++            vkDestroyImage(mDevice,mWindowDepth,nullptr);
++            mWindowDepth=VK_NULL_HANDLE; mWindowDepthMemory=VK_NULL_HANDLE;
++            return;
++        }
++        mWindowDepthWidth=t.width; mWindowDepthHeight=t.height;
++    }
++    EndActiveRenderPass();
++    VkImageMemoryBarrier barriers[2]={};
++    for(auto& b:barriers) { b.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
++        b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED; }
++    barriers[0].image=depth;
++    barriers[0].subresourceRange={VK_IMAGE_ASPECT_DEPTH_BIT|VK_IMAGE_ASPECT_STENCIL_BIT,0,1,0,layerCount};
++    barriers[0].srcAccessMask=VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
++    barriers[0].dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
++    barriers[0].oldLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
++    barriers[0].newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
++    barriers[1].image=mWindowDepth;
++    barriers[1].subresourceRange={VK_IMAGE_ASPECT_DEPTH_BIT|VK_IMAGE_ASPECT_STENCIL_BIT,0,1,firstLayer,layerCount};
++    barriers[1].dstAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;
++    barriers[1].oldLayout=VK_IMAGE_LAYOUT_UNDEFINED;
++    barriers[1].newLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
++    vkCmdPipelineBarrier(mCommandBuffer,VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|
++        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
++        VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,2,barriers);
++    VkImageCopy region={};
++    region.srcSubresource={VK_IMAGE_ASPECT_DEPTH_BIT,0,0,layerCount};
++    region.dstSubresource={VK_IMAGE_ASPECT_DEPTH_BIT,0,firstLayer,layerCount};
++    region.extent={t.width,t.height,1};
++    vkCmdCopyImage(mCommandBuffer,depth,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,mWindowDepth,
++                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&region);
++    barriers[0].srcAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
++    barriers[0].dstAccessMask=VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
++    barriers[0].oldLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
++    barriers[0].newLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
++    vkCmdPipelineBarrier(mCommandBuffer,VK_PIPELINE_STAGE_TRANSFER_BIT,
++        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
++        0,0,nullptr,0,nullptr,1,barriers);
++    mWindowDepthEyes|=eyes;
++}
++void VulkanContext::SnapshotWindowDepthBeforeClear() {
++    if(!mWindowCaptureOutput) return;
++    for(auto& t:mHdrTargets) {
++        if(!t.active || t.output!=mWindowCaptureOutput || t.failed) continue;
++        if(const VkImage depth=FindHdrDepth(t)) SnapshotWindowDepth(t,depth);
++    }
++}
++// Straight after the resolve wrote the tone-mapped scene into the eye image, and before the HUD
++// goes over it: that eye's layer, or both for a multiview scene, into the capture image, which the
++// window reads once the frame is done.
++void VulkanContext::CaptureWindowScene(HdrTarget& t,VkImage depth) {
++    const uint32_t firstLayer=t.layers==2?0u:t.layer, layerCount=t.layers==2?2u:1u;
++    SnapshotWindowDepth(t,depth);
++    VkImageMemoryBarrier barriers[2]={};
++    for(auto& b:barriers) { b.sType=VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
++        b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
++        b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,firstLayer,layerCount}; }
++    barriers[0].image=t.output;
++    barriers[0].srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
++    barriers[0].dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
++    barriers[0].oldLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
++    barriers[0].newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
++    barriers[1].image=mWindowCaptureImage;
++    barriers[1].dstAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;
++    barriers[1].oldLayout=VK_IMAGE_LAYOUT_UNDEFINED;
++    barriers[1].newLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
++    vkCmdPipelineBarrier(mCommandBuffer,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT|
++        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,2,barriers);
++    VkImageCopy region={};
++    region.srcSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,firstLayer,layerCount};
++    region.dstSubresource=region.srcSubresource;
++    region.extent={t.width,t.height,1};
++    vkCmdCopyImage(mCommandBuffer,t.output,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,mWindowCaptureImage,
++                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&region);
++    barriers[0].srcAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
++    barriers[0].dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
++    barriers[0].oldLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
++    barriers[0].newLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
++    vkCmdPipelineBarrier(mCommandBuffer,VK_PIPELINE_STAGE_TRANSFER_BIT,
++        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,0,0,nullptr,0,nullptr,1,barriers);
++    for(uint32_t i=0;i<layerCount;++i) {
++        const uint32_t eye=firstLayer+i;
++        std::memcpy(mWindowCaptureProjection[eye],t.projection[t.layers==2?eye:0u],sizeof(float)*16);
++        mWindowCapturedEyes|=1u<<eye;
++    }
++}
++#endif
+ }
+ #endif
+diff --git a/code/vr/vulkan/openxr_vulkan_context.cpp b/code/vr/vulkan/openxr_vulkan_context.cpp
+index 2ba21a8a..e76ad4b5 100644
+--- a/code/vr/vulkan/openxr_vulkan_context.cpp
++++ b/code/vr/vulkan/openxr_vulkan_context.cpp
+@@ -6,10 +6,16 @@
+ #include <jni.h>
+ #endif
+ #include <vulkan/vulkan.h>
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++#include <TargetConditionals.h>
++#endif
+ #include <openxr/openxr.h>
+ #include <openxr/openxr_platform.h>
+ 
+ #include <vr/vulkan/openxr_vulkan_context.h>
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++#include <vr/visionos/visionos_mirror.h>
++#endif
+ #include <vr/vulkan/material_pipeline.h>
+ #include <vr/vulkan/material_uniforms.h>
+ #include <vr/openxrmanager.h>
+@@ -98,7 +104,13 @@ VulkanContext::VulkanContext()
+       mDrawUniformMapped(NULL),
+       // GPU-skinned draws carry a 25-matrix palette. Keep enough per-frame
+       // arena space for dense city scenes without dropping late draw calls.
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++      // Dense districts with CSM (~1450 world draws plus ~500 cascade draws,
++      // 2.8 KB each) overflowed a 16 MB/3 arena on the headset.
++      mDrawUniformSize(64u*1024u*1024u),
++#else
+       mDrawUniformSize(16u*1024u*1024u),
++#endif
+       mDrawUniformOffset(0),
+       mDrawUniformEnd(0),
+       mDrawUniformAlignment(256),
+@@ -169,6 +181,12 @@ bool VulkanContext::Initialize(XrInstance xrInstance, XrSystemId systemId,
+ {
+     if(IsInitialized()) return true;
+ 
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    // No OpenXR runtime on visionOS: create the instance and device directly. MoltenVK is linked
++    // statically, so vkCreateInstance *is* MoltenVK (no loader, no portability enumeration).
++    (void)xrInstance; (void)systemId; (void)getProc;
++    const uint32_t selectedVkVersion=VK_API_VERSION_1_1;
++#else
+     PFN_xrGetVulkanGraphicsRequirements2KHR getRequirements = NULL;
+     PFN_xrCreateVulkanInstanceKHR createInstance = NULL;
+     PFN_xrGetVulkanGraphicsDevice2KHR getGraphicsDevice = NULL;
+@@ -199,6 +217,7 @@ bool VulkanContext::Initialize(XrInstance xrInstance, XrSystemId systemId,
+         static_cast<uint32_t>(XR_VERSION_MAJOR(selectedXrVersion)),
+         static_cast<uint32_t>(XR_VERSION_MINOR(selectedXrVersion)),
+         static_cast<uint32_t>(XR_VERSION_PATCH(selectedXrVersion)));
++#endif
+     VkApplicationInfo applicationInfo = { VK_STRUCTURE_TYPE_APPLICATION_INFO };
+     applicationInfo.pApplicationName = "The Simpsons Hit & Run VR";
+     applicationInfo.applicationVersion = VK_MAKE_VERSION(0,1,0);
+@@ -208,6 +227,22 @@ bool VulkanContext::Initialize(XrInstance xrInstance, XrSystemId systemId,
+ 
+     VkInstanceCreateInfo instanceInfo = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
+     instanceInfo.pApplicationInfo = &applicationInfo;
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    VkResult vkResult = vkCreateInstance(&instanceInfo,NULL,&mInstance);
++    if(vkResult != VK_SUCCESS)
++    {
++        VKXR_ERROR("vkCreateInstance failed (Vk %d)",static_cast<int>(vkResult));
++        Shutdown(); return false;
++    }
++    // Apple Silicon and Vision Pro have exactly one GPU, the same one CompositorServices uses.
++    uint32_t physicalDeviceCount = 1;
++    vkResult = vkEnumeratePhysicalDevices(mInstance,&physicalDeviceCount,&mPhysicalDevice);
++    if((vkResult != VK_SUCCESS && vkResult != VK_INCOMPLETE) || physicalDeviceCount == 0)
++    {
++        VKXR_ERROR("no Vulkan physical device (Vk %d)",static_cast<int>(vkResult));
++        Shutdown(); return false;
++    }
++#else
+     XrVulkanInstanceCreateInfoKHR xrInstanceInfo = {
+         XR_TYPE_VULKAN_INSTANCE_CREATE_INFO_KHR };
+     xrInstanceInfo.systemId = systemId;
+@@ -234,6 +269,7 @@ bool VulkanContext::Initialize(XrInstance xrInstance, XrSystemId systemId,
+         VKXR_ERROR("xrGetVulkanGraphicsDevice2KHR failed");
+         Shutdown(); return false;
+     }
++#endif
+ 
+     uint32_t familyCount = 0;
+     vkGetPhysicalDeviceQueueFamilyProperties(mPhysicalDevice,&familyCount,NULL);
+@@ -267,6 +303,13 @@ bool VulkanContext::Initialize(XrInstance xrInstance, XrSystemId systemId,
+     VkPhysicalDeviceFragmentDensityMapFeaturesEXT supportedDensity={
+         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT };
+     supportedMultiview.pNext=&supportedDensity;
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    // Timeline semaphores let the compositor's present wait for the engine's frame on the GPU
++    // (exported as an MTLSharedEvent) instead of the CPU draining the queue.
++    VkPhysicalDeviceTimelineSemaphoreFeatures supportedTimeline={
++        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES };
++    supportedDensity.pNext=&supportedTimeline;
++#endif
+     VkPhysicalDeviceFeatures2 supportedFeatures2={
+         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+     supportedFeatures2.pNext=&supportedMultiview;
+@@ -293,6 +336,11 @@ bool VulkanContext::Initialize(XrInstance xrInstance, XrSystemId systemId,
+         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES };
+     VkPhysicalDeviceFragmentDensityMapFeaturesEXT enabledDensity={
+         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT };
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS) && TARGET_OS_SIMULATOR
++    // The Simulator's GPU can't render to layered attachments, which MoltenVK's multiview needs
++    // (the world rendered black), so each eye renders separately there. The headset keeps multiview.
++    supportedMultiview.multiview=VK_FALSE;
++#endif
+     if(supportedMultiview.multiview)
+     {
+         enabledMultiview.multiview=VK_TRUE;
+@@ -314,6 +362,46 @@ bool VulkanContext::Initialize(XrInstance xrInstance, XrSystemId systemId,
+         logicalDeviceInfo.ppEnabledExtensionNames=&densityExtension;
+     }
+     logicalDeviceInfo.pEnabledFeatures=&enabledFeatures;
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    uint32_t availableCount=0;
++    vkEnumerateDeviceExtensionProperties(mPhysicalDevice,NULL,&availableCount,NULL);
++    std::vector<VkExtensionProperties> available(availableCount);
++    vkEnumerateDeviceExtensionProperties(mPhysicalDevice,NULL,&availableCount,available.data());
++    const auto hasExtension=[&available](const char* name){
++        for(const VkExtensionProperties& p:available)
++            if(std::strcmp(p.extensionName,name)==0) return true;
++        return false;};
++    // Drawable textures are imported with VK_EXT_metal_objects. The spec requires enabling
++    // VK_KHR_portability_subset whenever a device advertises it, and MoltenVK does.
++    if(!hasExtension("VK_EXT_metal_objects"))
++    {
++        VKXR_ERROR("VK_EXT_metal_objects unavailable");
++        Shutdown(); return false;
++    }
++    std::vector<const char*> deviceExtensions;
++    if(mFragmentDensityMapSupported) deviceExtensions.push_back(densityExtension);
++    deviceExtensions.push_back("VK_EXT_metal_objects");
++    VkPhysicalDeviceTimelineSemaphoreFeatures enabledTimeline={
++        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES };
++    if(supportedTimeline.timelineSemaphore && hasExtension("VK_KHR_timeline_semaphore"))
++    {
++        enabledTimeline.timelineSemaphore=VK_TRUE;
++        enabledTimeline.pNext=const_cast<void*>(logicalDeviceInfo.pNext);
++        logicalDeviceInfo.pNext=&enabledTimeline;
++        deviceExtensions.push_back("VK_KHR_timeline_semaphore");
++        mTimelineSemaphoreSupported=true;
++    }
++    if(hasExtension("VK_KHR_portability_subset"))
++        deviceExtensions.push_back("VK_KHR_portability_subset");
++    logicalDeviceInfo.enabledExtensionCount=static_cast<uint32_t>(deviceExtensions.size());
++    logicalDeviceInfo.ppEnabledExtensionNames=deviceExtensions.data();
++    vkResult=vkCreateDevice(mPhysicalDevice,&logicalDeviceInfo,NULL,&mDevice);
++    if(vkResult!=VK_SUCCESS)
++    {
++        VKXR_ERROR("vkCreateDevice failed (Vk %d)",static_cast<int>(vkResult));
++        Shutdown(); return false;
++    }
++#else
+     XrVulkanDeviceCreateInfoKHR xrDeviceInfo = {
+         XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR };
+     xrDeviceInfo.systemId=systemId;
+@@ -328,6 +416,7 @@ bool VulkanContext::Initialize(XrInstance xrInstance, XrSystemId systemId,
+                    static_cast<int>(xrResult),static_cast<int>(vkResult));
+         Shutdown(); return false;
+     }
++#endif
+ 
+     vkGetDeviceQueue(mDevice,mQueueFamilyIndex,0,&mQueue);
+     VkCommandPoolCreateInfo poolInfo={VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+@@ -385,6 +474,7 @@ bool VulkanContext::Initialize(XrInstance xrInstance, XrSystemId systemId,
+         // a graphics pipeline.
+         mPipelineCachePath=std::string(prefPath)+"vulkan_pipeline_cache_v2.bin";
+         SDL_free(prefPath);
++#if SDL_MAJOR_VERSION < 3
+         SDL_RWops* cacheFile=SDL_RWFromFile(mPipelineCachePath.c_str(),"rb");
+         if(cacheFile)
+         {
+@@ -398,6 +488,21 @@ bool VulkanContext::Initialize(XrInstance xrInstance, XrSystemId systemId,
+             }
+             SDL_RWclose(cacheFile);
+         }
++#else
++        SDL_IOStream* cacheFile=SDL_IOFromFile(mPipelineCachePath.c_str(),"rb");
++        if(cacheFile)
++        {
++            const Sint64 cacheSize=SDL_GetIOSize(cacheFile);
++            if(cacheSize>0 && cacheSize<64*1024*1024)
++            {
++                pipelineCacheData.resize(static_cast<size_t>(cacheSize));
++                if(SDL_ReadIO(cacheFile,pipelineCacheData.data(),
++                              pipelineCacheData.size())!=pipelineCacheData.size())
++                    pipelineCacheData.clear();
++            }
++            SDL_CloseIO(cacheFile);
++        }
++#endif
+     }
+ #endif
+     VkPipelineCacheCreateInfo pipelineCacheInfo={
+@@ -589,7 +694,12 @@ bool VulkanContext::ClearImageInPddiEye(VkImage image,bool firstUse,uint32_t lay
+     // Loading transitions can legitimately submit an eye with no geometry;
+     // a deferred render-pass clear would then never run and the compositor
+     // would expose the previous contents of that swapchain layer as trails.
+-    const VkClearColorValue black={{0.0f,0.0f,0.0f,1.0f}};
++    VkClearColorValue black={{0.0f,0.0f,0.0f,1.0f}};
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    if(mWindowMirrorOnly && layer==1) black={{1.0f,1.0f,1.0f,1.0f}};
++    mTransparentEyeImage=mTransparentEyeClear && !mWindowMirrorOnly?image:VK_NULL_HANDLE;
++    if(mTransparentEyeImage) black.float32[3]=0.0f;
++#endif
+     vkCmdClearColorImage(mCommandBuffer,image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          &black,1,&toTransfer.subresourceRange);
+ 
+@@ -633,7 +743,8 @@ bool VulkanContext::ClearImageInPddiEye(VkImage image,bool firstUse,uint32_t lay
+ 
+ bool VulkanContext::LoadStartupSplash(const char* path,VkFormat targetFormat)
+ {
+-#if defined(SRR2_OPENXR_PLATFORM_WIN32)
++    // visionOS links the vendored libpng 1.0.3, which predates the png_image API used here.
++#if defined(SRR2_OPENXR_PLATFORM_WIN32) && !defined(SRR2_OPENXR_PLATFORM_VISIONOS)
+     if(!path || !IsInitialized()) return false;
+     png_image png={};
+     png.version=PNG_IMAGE_VERSION;
+@@ -702,6 +813,9 @@ bool VulkanContext::BeginPddiEye()
+         mLastFenceWaitMilliseconds=
+             std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-
+                                                      fenceStart).count();
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++        mFenceWaitTotal+=mLastFenceWaitMilliseconds;
++#endif
+         if(mActiveFrameArena->timestampQueryPool)
+         {
+             uint64_t timestamps[2]={};
+@@ -872,6 +986,49 @@ bool VulkanContext::HasSubmittedFrames() const
+     return false;
+ }
+ 
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++void VulkanContext::ReleaseRenderTarget(VkImage image)
++{
++    std::lock_guard<std::recursive_mutex> guard(mGraphicsMutex);
++    if(!mDevice||!image||mPddiEyeActive) return;
++    // Called between frames. Draining the queue means nothing submitted still uses what is freed
++    // here, so the retired objects can go now rather than at Shutdown. Each Render Scale change
++    // otherwise kept a full set of eye-sized HDR and depth targets alive.
++    vkQueueWaitIdle(mQueue);
++    DestroyHdrTargetsFor(image);
++    RetireRenderTarget(image);
++    ReleaseDeferredResources();
++}
++
++void VulkanContext::ReleaseRetiredResources()
++{
++    std::lock_guard<std::recursive_mutex> guard(mGraphicsMutex);
++    if(!mDevice||mPddiEyeActive) return;
++    if(mDeferredPipelines.empty()&&mDeferredPipelineLayouts.empty()&&mDeferredShaderModules.empty()&&
++       mDeferredFramebuffers.empty()&&mDeferredRenderPasses.empty()&&mDeferredViews.empty()&&
++       mDeferredDescriptorSets.empty()&&mDeferredSamplers.empty()&&mDeferredImages.empty()&&
++       mDeferredImageMemory.empty()&&mDeferredBuffers.empty()&&mDeferredBufferMemory.empty())
++        return;
++    vkQueueWaitIdle(mQueue);
++    // Logged at most every few seconds: how much the engine unloads, for memory reports.
++    static unsigned images=0,buffers=0,others=0;
++    static Uint64 lastLog=0;
++    images+=static_cast<unsigned>(mDeferredImages.size());
++    buffers+=static_cast<unsigned>(mDeferredBuffers.size());
++    others+=static_cast<unsigned>(mDeferredViews.size()+mDeferredPipelines.size()+
++                                  mDeferredFramebuffers.size()+mDeferredDescriptorSets.size());
++    ReleaseDeferredResources();
++    const Uint64 now=SDL_GetTicks();
++    if(now-lastLog>=5000)
++    {
++        SDL_Log("visionOS: freed %u retired images, %u buffers and %u other Vulkan objects",
++                images,buffers,others);
++        images=buffers=others=0;
++        lastLog=now;
++    }
++}
++#endif
++
+ void VulkanContext::RetireRenderTarget(VkImage image)
+ {
+     if(!image) return;
+@@ -896,6 +1053,14 @@ void VulkanContext::RetireRenderTarget(VkImage image)
+             // so leaves duplicate VkImageView handles in mDeferredViews and
+             // causes a driver crash when the queue is drained on the next
+             // frame.  Density views are likewise texture-owned.
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++            // The cache creates that attachment view itself (DrawPddiGeometry), and nothing
++            // else releases it before Shutdown. MoltenVK's view keeps the whole image alive, so
++            // every Render Scale change kept its eye-sized images. ReleaseDeferredResources
++            // drops duplicates before releasing.
++            if(removed.view) mDeferredViews.push_back(removed.view);
++            if(removed.densityView) mDeferredViews.push_back(removed.densityView);
++#endif
+         }
+         if(removed.ownsPipeline)
+         {
+@@ -1001,6 +1166,9 @@ void VulkanContext::ClearPddiBuffers(uint32_t bufferMask)
+     // serial makes that pass use its depth/stencil-clear variant, which is
+     // required when the GUI view clears depth after the 3D world. The base
+     // PDDI implementation was a no-op, leaving every HUD fragment occluded.
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    if(bufferMask&(2u|4u)) SnapshotWindowDepthBeforeClear();
++#endif
+     if(bufferMask&(2u|4u)) ++mEyeSerial;
+     if(bufferMask&1u) mColourClearMask=0x3u;
+ }
+@@ -1209,6 +1377,9 @@ bool VulkanContext::GetVehicleCubeMapTarget(VulkanEyeTarget* target) const
+ 
+ bool VulkanContext::BeginShadowCascade(uint32_t cascadeIndex,uint32_t size)
+ {
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    if(mWindowMirrorOnly) return false;
++#endif
+     if(!mPddiEyeActive || cascadeIndex>=3 || !size || mShadowPass) return false;
+     EndActiveRenderPass();
+     ShadowCascade& cascade=mShadowCascades[cascadeIndex];
+@@ -1407,6 +1578,16 @@ bool VulkanContext::DrawPddiGeometry(VkImage image,VkFormat format,
+     // Cubemap +Y is also physical layer 2, but it must remain a normal mono
+     // attachment or Vulkan writes layers 0/1 and leaves +Y as clear sky.
+     const bool vehicleCubeTarget=mVehicleCubeCapture && image==mVehicleCubeImage;
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    // The shared-space window's scene mirror: the left eye's (or multiview's) world draws into
++    // its picture.
++    if(image==mWindowCaptureOutput && image && !material.hudPass && !vehicleCubeTarget &&
++       (arrayLayer==0 || arrayLayer==2) && SharVisionOS::IsMirrorEnabled())
++        SharVisionOS::MirrorDraw(projection,modelview,material,arrayLayer==2);
++    if(mWindowMirrorOnly && !material.hudPass &&
++       (vehicleCubeTarget || (image && image==mWindowCaptureOutput && !(mWindowMetering && arrayLayer==0))))
++        return true;
++#endif
+     if(!material.hudPass && !vehicleCubeTarget)
+         std::memcpy(mVolumetricSunDirection,material.enhancedSunDirection,
+                     sizeof(mVolumetricSunDirection));
+@@ -1444,6 +1625,10 @@ bool VulkanContext::DrawPddiGeometry(VkImage image,VkFormat format,
+         di.samples=VK_SAMPLE_COUNT_1_BIT; di.tiling=VK_IMAGE_TILING_OPTIMAL;
+         di.usage=VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+         if(hdrScene) di.usage|=VK_IMAGE_USAGE_SAMPLED_BIT;
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++        // The shared-space window copies the world's depth out (SnapshotWindowDepth).
++        if(hdrScene) di.usage|=VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
++#endif
+         else if(!multiview) di.usage|=VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+         di.sharingMode=VK_SHARING_MODE_EXCLUSIVE; di.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;
+         if(vkCreateImage(mDevice,&di,NULL,&target.image)!=VK_SUCCESS) return false;
+@@ -1483,6 +1668,12 @@ bool VulkanContext::DrawPddiGeometry(VkImage image,VkFormat format,
+     VkShaderModule vertexModule=VK_NULL_HANDLE,fragmentModule=VK_NULL_HANDLE;
+     VkPipelineLayout layout=VK_NULL_HANDLE; VkPipeline pipeline=VK_NULL_HANDLE;
+     bool success=false,cached=false,reusedRenderTargets=false,reusedPipeline=false;
++    // Set once the render targets and pipeline exist. A draw can still fail
++    // after vkCmdBindPipeline (the uniform arena is full); the command buffer
++    // then references these objects, so they are cached rather than destroyed.
++    // Destroying them there is invalid Vulkan that desktop and Adreno drivers
++    // tolerate, but MoltenVK encodes at submit and crashes on the freed pipeline.
++    bool created=false;
+     // Match GLES program selection by active material features. Variant 1 is
+     // the minimal unlit path, variant 2 keeps lighting/fog but drops all
+     // layer/reflection varyings and samplers, and variant 0 is the full path.
+@@ -1506,7 +1697,13 @@ bool VulkanContext::DrawPddiGeometry(VkImage image,VkFormat format,
+     hashStateValue(width); hashStateValue(height); hashStateValue(arrayLayer);
+     hashStateValue(multiview);
+     hashStateValue(static_cast<uint64_t>(topology));
+-    hashStateValue(material.blendMode); hashStateValue(effectiveCull);
++    // Only into an eye image the room shows through: the HUD's offscreen captures are composited
++    // with straight alpha, and keep it.
++    bool coverageAlpha=false;
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    coverageAlpha=material.blendMode==1 && mTransparentEyeImage && image==mTransparentEyeImage;
++#endif
++    hashStateValue(material.blendMode); hashStateValue(coverageAlpha); hashStateValue(effectiveCull);
+     hashStateValue(material.colourWriteMask);
+     hashStateValue(material.depthTest); hashStateValue(material.depthWrite);
+     hashStateValue(shaderVariant); hashStateValue(materialModel);
+@@ -1523,6 +1720,7 @@ bool VulkanContext::DrawPddiGeometry(VkImage image,VkFormat format,
+            state.height==height && state.arrayLayer==arrayLayer &&
+            state.multiview==multiview &&
+            state.topology==topology && state.blendMode==material.blendMode &&
++           state.coverageAlpha==coverageAlpha &&
+            state.cullMode==effectiveCull &&
+            state.colourWriteMask==material.colourWriteMask &&
+            state.depthTest==material.depthTest && state.depthWrite==material.depthWrite &&
+@@ -1600,6 +1798,7 @@ bool VulkanContext::DrawPddiGeometry(VkImage image,VkFormat format,
+                state.multiview==multiview &&
+                (state.densityImage!=VK_NULL_HANDLE)==foveated &&
+                state.topology==topology && state.blendMode==material.blendMode &&
++           state.coverageAlpha==coverageAlpha &&
+                state.cullMode==effectiveCull &&
+                state.colourWriteMask==material.colourWriteMask &&
+                state.depthTest==material.depthTest && state.depthWrite==material.depthWrite &&
+@@ -1836,6 +2035,16 @@ bool VulkanContext::DrawPddiGeometry(VkImage image,VkFormat format,
+         ba.srcAlphaBlendFactor=ba.srcColorBlendFactor;
+         ba.dstAlphaBlendFactor=ba.dstColorBlendFactor;
+         ba.alphaBlendOp=ba.colorBlendOp;
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++        // Alpha blending's alpha as coverage ("over"): with the room behind menus, a menu's alpha
++        // is what the room shows through, and the GL-style a*a made soft edges glow over it.
++        // Gameplay frames are presented opaque whatever their alpha.
++        if(coverageAlpha)
++        {
++            ba.srcAlphaBlendFactor=VK_BLEND_FACTOR_ONE;
++            ba.dstAlphaBlendFactor=VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
++        }
++#endif
+     }
+     VkPipelineColorBlendStateCreateInfo blend={VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+     blend.attachmentCount=1; blend.pAttachments=&ba;
+@@ -1879,6 +2088,7 @@ bool VulkanContext::DrawPddiGeometry(VkImage image,VkFormat format,
+     if(vkCreateGraphicsPipelines(mDevice,pipelineCache,1,&pi,NULL,&pipeline)!=VK_SUCCESS) break;
+     }
+     }
++    created=true;
+     if(mPipelinePrewarm) { success=true; break; }
+     const bool batched=mPddiEyeActive;
+     if(!batched)
+@@ -1896,6 +2106,10 @@ bool VulkanContext::DrawPddiGeometry(VkImage image,VkFormat format,
+         VkRenderPassBeginInfo rb={VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+         VkClearValue clearValues[2]={};
+         clearValues[0].color={{0.0f,0.0f,0.0f,1.0f}};
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++        if(mWindowMirrorOnly && arrayLayer==1) clearValues[0].color={{1.0f,1.0f,1.0f,1.0f}};
++        if(mTransparentEyeImage && image==mTransparentEyeImage) clearValues[0].color.float32[3]=0.0f;
++#endif
+         clearValues[1].depthStencil={1.0f,0};
+         rb.renderPass=colourNeedsClear?clearRenderPass:
+                       depthNeedsClear?depthClearRenderPass:renderPass;
+@@ -2004,6 +2218,23 @@ bool VulkanContext::DrawPddiGeometry(VkImage image,VkFormat format,
+                                 0,1,&selectedTexture,0,NULL);
+         mBoundTextureSets[0]=selectedTexture;
+     }
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    // The lit shaders declare sets 2 and 6 even where the flags below skip binding them (Lit +
++    // Legacy/Phong/Toon), and Vulkan requires every statically used set to be bound. Other drivers
++    // tolerate the gap; MoltenVK binds each declared set up front and crashes on a null one. So any
++    // slot still unbound in this pass gets its fallback; the binds below replace it as before.
++    {
++        const VkDescriptorSet fallbacks[7]={VK_NULL_HANDLE,mFallbackDescriptorSet,mFallbackDescriptorSet,
++            mFallbackDescriptorSet,mShadowDescriptorSet,mFallbackPbrDescriptorSet,mFallbackDescriptorSet};
++        for(uint32_t slot=1;slot<7;++slot)
++        {
++            if(mBoundTextureSets[slot] || !fallbacks[slot]) continue;
++            vkCmdBindDescriptorSets(mCommandBuffer,VK_PIPELINE_BIND_POINT_GRAPHICS,layout,
++                                    slot+1,1,&fallbacks[slot],0,NULL);
++            mBoundTextureSets[slot]=fallbacks[slot];
++        }
++    }
++#endif
+     // Full materials and base-lit PBR both consume the selected environment.
+     // Other base-lit draws still avoid this descriptor bind.
+     if(materialPipeline.usesEnvironment)
+@@ -2125,7 +2356,17 @@ bool VulkanContext::DrawPddiGeometry(VkImage image,VkFormat format,
+     }
+     const VkDeviceSize drawOffset=(mDrawUniformOffset+mDrawUniformAlignment-1)&
+                                   ~(mDrawUniformAlignment-1);
+-    if(drawOffset+materialUniformSize>mDrawUniformEnd) break;
++    if(drawOffset+materialUniformSize>mDrawUniformEnd)
++    {
++        static bool reported=false;
++        if(!reported)
++        {
++            reported=true;
++            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,"Vulkan: per-frame draw uniform arena full (%llu bytes); dropping draws",
++                static_cast<unsigned long long>(mDrawUniformSize/FrameArenaCount));
++        }
++        break;
++    }
+     std::memcpy(static_cast<unsigned char*>(mDrawUniformMapped)+drawOffset,
+                 constants,materialUniformSize);
+     mDrawUniformOffset=drawOffset+materialUniformSize;
+@@ -2173,7 +2414,7 @@ bool VulkanContext::DrawPddiGeometry(VkImage image,VkFormat format,
+     }
+     success=true;
+     } while(false);
+-    if(success && !cached)
++    if((success || created) && !cached)
+     {
+         CachedDrawState state={};
+         state.image=image;
+@@ -2182,6 +2423,7 @@ bool VulkanContext::DrawPddiGeometry(VkImage image,VkFormat format,
+         state.height=height; state.arrayLayer=arrayLayer; state.topology=topology;
+         state.multiview=multiview;
+         state.blendMode=material.blendMode;
++        state.coverageAlpha=coverageAlpha;
+         state.cullMode=effectiveCull;
+         state.colourWriteMask=material.colourWriteMask;
+         state.depthTest=material.depthTest; state.depthWrite=material.depthWrite;
+@@ -2632,6 +2874,10 @@ void VulkanContext::DestroyTexture(VkImage image,VkDeviceMemory memory,
+     std::lock_guard<std::recursive_mutex> guard(mGraphicsMutex);
+     if(!mDevice) return;
+     mUploadedTextureImages.erase(image);
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    // Retired objects are really freed on visionOS, so a later image can reuse this handle.
++    mLdrOffscreenTargets.erase(image);
++#endif
+     for(auto it=mPendingTextureUploads.begin();it!=mPendingTextureUploads.end();)
+     {
+         if(it->image==image)
+@@ -2807,6 +3053,12 @@ void VulkanContext::Shutdown()
+         if(mDrawUniformMemory) vkFreeMemory(mDevice,mDrawUniformMemory,NULL);
+         mDrawUniformBuffer=VK_NULL_HANDLE; mDrawUniformMemory=VK_NULL_HANDLE;
+         ReleaseDeferredResources();
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++        if(mWindowDepth) vkDestroyImage(mDevice,mWindowDepth,NULL);
++        if(mWindowDepthMemory) vkFreeMemory(mDevice,mWindowDepthMemory,NULL);
++        mWindowDepth=VK_NULL_HANDLE; mWindowDepthMemory=VK_NULL_HANDLE;
++        mWindowCaptureOutput=mWindowCaptureImage=VK_NULL_HANDLE;
++#endif
+         DestroyBuffer(mStartupSplashBuffer,mStartupSplashMemory);
+         mStartupSplashBuffer=VK_NULL_HANDLE; mStartupSplashMemory=VK_NULL_HANDLE;
+         mStartupSplashWidth=0; mStartupSplashHeight=0;
+@@ -2882,12 +3134,21 @@ void VulkanContext::Shutdown()
+                 if(vkGetPipelineCacheData(mDevice,mPipelineCache,&cacheSize,
+                                           cacheData.data())==VK_SUCCESS)
+                 {
++#if SDL_MAJOR_VERSION < 3
+                     SDL_RWops* cacheFile=SDL_RWFromFile(mPipelineCachePath.c_str(),"wb");
+                     if(cacheFile)
+                     {
+                         SDL_RWwrite(cacheFile,cacheData.data(),1,cacheSize);
+                         SDL_RWclose(cacheFile);
+                     }
++#else
++                    SDL_IOStream* cacheFile=SDL_IOFromFile(mPipelineCachePath.c_str(),"wb");
++                    if(cacheFile)
++                    {
++                        SDL_WriteIO(cacheFile,cacheData.data(),cacheSize);
++                        SDL_CloseIO(cacheFile);
++                    }
++#endif
+                 }
+             }
+         }
+diff --git a/code/vr/vulkan/openxr_vulkan_context.h b/code/vr/vulkan/openxr_vulkan_context.h
+index 158bce63..30cf16da 100644
+--- a/code/vr/vulkan/openxr_vulkan_context.h
++++ b/code/vr/vulkan/openxr_vulkan_context.h
+@@ -34,6 +34,45 @@ public:
+ 
+     bool IsInitialized() const { return mDevice != VK_NULL_HANDLE; }
+     bool IsMultiviewSupported() const { return mMultiviewSupported; }
++    bool IsTimelineSemaphoreSupported() const { return mTimelineSemaphoreSupported; }
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    // visionOS resizes its eye image when the render scale changes. Between frames, this frees
++    // everything made for the old one (HDR targets, framebuffers, depth targets) and whatever
++    // else is waiting on a retire, so the caller can destroy the image.
++    void ReleaseRenderTarget(VkImage image);
++    // Frees what the engine has retired (unloaded textures, buffers, render targets), which
++    // upstream keeps until Shutdown: every zone and level change would otherwise add to it until
++    // visionOS ends the app. Call between frames; it drains the queue first when there's anything.
++    void ReleaseRetiredResources();
++    // The shared-space window's depth relief needs the 3D scene without the HUD, and its depth.
++    // While `output` is set, each HDR resolve into it also copies the tone-mapped scene (that eye's
++    // layer, or both) into the same layers of `capture`, before any HUD is drawn over it;
++    // VK_NULL_HANDLE stops that.
++    void SetWindowSceneCapture(VkImage output,VkImage capture);
++    // Whether this frame's scene went into the capture image for both eyes, and if so the image
++    // holding their depth (2 layers, one per eye, sampled) and each eye's projection (column-major,
++    // GL depth range). Starts the next frame's capture.
++    bool TakeWindowSceneCapture(VkImage* depth,float projection[2][16]);
++    // With the window's scene mirror (vr/visionos/visionos_mirror.h), RealityKit renders the world,
++    // so the engine only draws the HUD into the window's eye images: world, vehicle-cubemap and
++    // shadow draws are recorded but not drawn, and the right eye's image starts white rather than
++    // black, so the window can recover the HUD's alpha from the pair.
++    void SetWindowMirrorOnly(bool enabled) { mWindowMirrorOnly=enabled; }
++    // visionOS, a mixed Full space (the room behind menus): eye images clear to transparent, so a
++    // frame the world doesn't cover (menus, loading) shows the room where nothing is drawn.
++    void SetTransparentEyeClear(bool enabled) { mTransparentEyeClear=enabled; }
++    bool IsWindowMirrorOnly() const { return mWindowMirrorOnly; }
++    // The mirror exposes and tone-maps as the HDR resolve does, but with no world drawn the
++    // engine's meter has nothing to read. On a metering frame the left eye draws its world after
++    // all, into its HDR target only: the meter runs, and the resolve leaves the window's picture
++    // HUD-only on its black. The meter's step shows where it was headed; UpdateWindowExposure (a
++    // window frame, `seconds` since the last) adapts towards that as fast as the meter would and
++    // returns the exposure.
++    void SetWindowMetering(bool enabled) { mWindowMetering=enabled; }
++    float UpdateWindowExposure(float seconds);
++    // The CPU's waits for the GPU (a frame arena's fence) since the last call, in milliseconds.
++    double TakeFenceWaits() { const double total=mFenceWaitTotal; mFenceWaitTotal=0.0; return total; }
++#endif
+     double GetLastGpuMilliseconds() const { return mLastGpuMilliseconds; }
+     double GetLastFenceWaitMilliseconds() const { return mLastFenceWaitMilliseconds; }
+     VkInstance GetInstance() const { return mInstance; }
+@@ -159,6 +198,31 @@ private:
+     bool ResolveHdrTargets();
+     bool CreateHdrResolve(HdrTarget& target,VkImage depth);
+     void DestroyHdrTargets();
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    void DestroyHdrTargetsFor(VkImage output);
++    void CaptureWindowScene(HdrTarget& target,VkImage depth);
++    // The game clears depth partway through an eye so later layers draw over the world (its GUI
++    // view), and an eye's resolve can come after that. So the window keeps its own copy of the
++    // world's depth, taken at that clear or at the resolve, whichever comes first.
++    void SnapshotWindowDepth(HdrTarget& target,VkImage depth);
++    void SnapshotWindowDepthBeforeClear();
++    VkImage FindHdrDepth(const HdrTarget& target);
++    VkImage mWindowCaptureOutput=VK_NULL_HANDLE, mWindowCaptureImage=VK_NULL_HANDLE;
++    VkImage mWindowDepth=VK_NULL_HANDLE;
++    VkDeviceMemory mWindowDepthMemory=VK_NULL_HANDLE;
++    uint32_t mWindowDepthWidth=0, mWindowDepthHeight=0;
++    float mWindowCaptureProjection[2][16]={};
++    uint32_t mWindowCapturedEyes=0, mWindowDepthEyes=0;  // bit per eye
++    bool mWindowMirrorOnly=false;
++    bool mTimelineSemaphoreSupported=false;
++    bool mTransparentEyeClear=false;
++    VkImage mTransparentEyeImage=VK_NULL_HANDLE;
++    bool mWindowMetering=false;
++    VkImage mWindowMeterOutput=VK_NULL_HANDLE;  // the metered target's, until its step is read
++    uint32_t mWindowMeterAge=0;                 // window frames since
++    float mWindowMeterSeed=1.0f, mWindowExposure=1.0f, mWindowExposureTarget=0.0f;
++    double mFenceWaitTotal=0.0;
++#endif
+     // Pure3D's Windows loader creates and destroys textures on its worker
+     // thread while the main thread records an XR eye. Vulkan queue, command
+     // pool, descriptor-pool and context-owned containers require one common
+@@ -181,6 +245,7 @@ private:
+         uint32_t width, height, arrayLayer;
+         VkPrimitiveTopology topology;
+         uint32_t blendMode;
++        bool coverageAlpha;  // visionOS: alpha blending's alpha as coverage (the room behind menus)
+         VkCullModeFlags cullMode;
+         VkColorComponentFlags colourWriteMask;
+         bool multiview;
+diff --git a/code/worldsim/character/charactercontroller.cpp b/code/worldsim/character/charactercontroller.cpp
+index 6505a4ab..7732b042 100644
+--- a/code/worldsim/character/charactercontroller.cpp
++++ b/code/worldsim/character/charactercontroller.cpp
+@@ -359,12 +359,16 @@ void CameraRelativeCharacterController::GetDirection( rmt::Vector& outDirection
+ #if defined(RAD_ANDROID) || defined(SRR2_OPENXR_PLATFORM_WIN32)
+     if( SharOpenXR::IsVrModeEnabled() )
+     {
+-        rmt::Vector headForward;
+-        if( SharOpenXR::GetHeadForward( &headForward ) )
++        // Move Direction: along the left controller's heading when chosen and tracked, else the
++        // head's.
++        rmt::Vector moveForward;
++        const bool controller = SharOpenXR::GetMoveDirection() == 1 &&
++                                SharOpenXR::GetControllerForward( 0, &moveForward );
++        if( controller || SharOpenXR::GetHeadForward( &moveForward ) )
+         {
+             rmt::Matrix headMatrix;
+             headMatrix.Identity();
+-            headMatrix.FillHeading( headForward, rmt::Vector( 0.0f, 1.0f, 0.0f ) );
++            headMatrix.FillHeading( moveForward, rmt::Vector( 0.0f, 1.0f, 0.0f ) );
+             outDirection.Transform( headMatrix );
+ 
+             rmt::Matrix invMat = mpCharacter->GetInverseParentTransform();
+diff --git a/code/worldsim/character/characterrenderable.cpp b/code/worldsim/character/characterrenderable.cpp
+index 0707dc3c..d60d622d 100644
+--- a/code/worldsim/character/characterrenderable.cpp
++++ b/code/worldsim/character/characterrenderable.cpp
+@@ -163,6 +163,11 @@ END_PROFILE("CharRender Cull")
+ 
+     bool hideForNearCamera=sqrDistFromCam<dist;
+ #if defined(SRR2_OPENXR)
++    // The window's scene mirror (visionOS) shows the scene from the viewer's eyes in front of the
++    // window, not from the game's camera, so a character the camera is squeezed up against (Homer
++    // at a coin in the narrow passage beside his house) is in nobody's way there, and vanishing
++    // looked like a glitch. Hidden only with the camera all but inside them.
++    if(hideForNearCamera && SharOpenXR::IsSceneMirrorUp()) hideForNearCamera=sqrDistFromCam<0.36f;
+     if(hideForNearCamera && SharOpenXR::IsVrModeEnabled())
+     {
+         // The original third-person renderer hides every character within
+@@ -333,8 +338,21 @@ void CharacterRenderable::DisplayShadow( tPose* pose, const BlobShadowParams* Bl
+             return;
+         }
+         float cameraToShadow = camPos.Magnitude();
+-		camPos.Normalize();
+-        camPos.Scale( 0.25f );
++#if defined(SRR2_OPENXR)
++        if( SharOpenXR::IsSceneMirrorUp() )
++        {
++            // The window's scene mirror (visionOS) is seen from the viewer's own eyes, not this
++            // camera, and draws the shadow after the character: slid towards the camera it floated
++            // there and darkened his ankles. Just off the ground instead, the same from any angle.
++            camPos = BlobParams->GroundNormal;
++            camPos.Scale( 0.03f );
++        }
++        else
++#endif
++        {
++		    camPos.Normalize();
++            camPos.Scale( 0.25f );
++        }
+ 		rmt::Matrix transform;
+ 		transform.Identity();
+ 		transform.FillTranslate( BlobParams->GroundPos );
+diff --git a/code/worldsim/redbrick/geometryvehicle.cpp b/code/worldsim/redbrick/geometryvehicle.cpp
+index fa4245b7..baa0a018 100644
+--- a/code/worldsim/redbrick/geometryvehicle.cpp
++++ b/code/worldsim/redbrick/geometryvehicle.cpp
+@@ -1175,7 +1175,7 @@ BEGIN_PROFILE("GeometryVehicle::CompDraw->Disp")
+         // Opaque bodywork receives shadows, while translucent glass retains
+         // its legacy shader without requiring a later composite replay.
+         p3dSetCsmIntegratedVehicleReceiver(
+-            SharOpenXR::IsVrModeEnabled() && SharOpenXR::IsCsmEnabled() &&
++            SharOpenXR::IsVrModeEnabled() && SharOpenXR::AreCsmShadowsDrawn() &&
+             gPglCsmBillboardMode==0);
+         float dents[16]={0.0f};
+         for(int dent=0;dent<mDentCount;++dent)
+@@ -1437,7 +1437,21 @@ void GeometryVehicle::DisplayShadow( BlobShadowParams* BlobParams )
+         Fades[ 5 ][ 1 ] = -0.866f * BlobFade; // Cos( 150 )
+     }
+ 
+-	camPos.Normalize();
++#if defined(SRR2_OPENXR)
++	if( SharOpenXR::IsSceneMirrorUp() )
++	{
++		// The window's scene mirror (visionOS) is seen from the viewer's own eyes, not this camera,
++		// and draws the shadow after the car: slid a metre towards the camera it floated there and
++		// darkened the wheels. Just off the ground instead, the same from any angle.
++		camPos = BlobParams->GroundNormal;
++		camPos.Scale( 0.03f );
++		yOffset = 0.0f;
++	}
++	else
++#endif
++	{
++		camPos.Normalize();
++	}
+ 	rmt::Matrix transform;
+ 	transform.Identity();
+ 	transform.FillTranslate( BlobParams->GroundPos );
+diff --git a/code/worldsim/skidmarks/skidmark.cpp b/code/worldsim/skidmarks/skidmark.cpp
+index e77eab49..db3e311c 100644
+--- a/code/worldsim/skidmarks/skidmark.cpp
++++ b/code/worldsim/skidmarks/skidmark.cpp
+@@ -1,6 +1,9 @@
+ #include <worldsim/skidmarks/skidmark.h>
+ #include <camera/supercammanager.h>
+ #include <debug/profiler.h>
++#if defined(SRR2_OPENXR)
++#include <vr/openxrmanager.h>
++#endif
+ 
+ const float METERS_PER_TEX_UNIT = 0.5f;
+ const float TEX_UNITS_PER_METER = 1.0f / METERS_PER_TEX_UNIT;
+@@ -84,7 +87,12 @@ void Skidmark::Display()
+ 
+ void Skidmark::Extend( const rmt::Vector& position, const rmt::Vector& forward, const rmt::Vector groundNormal, float halfWidth, float intensity )
+ {
++#if defined(SRR2_OPENXR)
++    // (Less in the window's scene mirror, which draws skid marks after the tyres on them.)
++    const float Z_FIGHTING_OFFSET = SharOpenXR::GroundShadowOffset( 0.1f, 0.03f );
++#else
+     const float Z_FIGHTING_OFFSET = 0.1f;
++#endif
+     
+     rAssert( SpaceLeft () );
+     rmt::Vector elevatedPosition = position + (groundNormal * Z_FIGHTING_OFFSET);
+diff --git a/libs/SDL3/CMakeLists.txt b/libs/SDL3/CMakeLists.txt
+index 2221a3b2..3fb54203 100644
+--- a/libs/SDL3/CMakeLists.txt
++++ b/libs/SDL3/CMakeLists.txt
+@@ -386,7 +386,7 @@ dep_option(SDL_HIDAPI              "Enable the HIDAPI subsystem" ON "NOT VISIONO
+ dep_option(SDL_HIDAPI_LIBUSB       "Use libusb for low level joystick drivers" ON "SDL_HIDAPI;SDL_HIDAPI_LIBUSB_AVAILABLE" OFF)
+ dep_option(SDL_HIDAPI_LIBUSB_SHARED "Dynamically load libusb support" ON "SDL_HIDAPI_LIBUSB;SDL_DEPS_SHARED" OFF)
+ dep_option(SDL_HIDAPI_JOYSTICK     "Use HIDAPI for low level joystick drivers" ON SDL_HIDAPI OFF)
+-dep_option(SDL_VIRTUAL_JOYSTICK    "Enable the virtual-joystick driver" ON SDL_HIDAPI OFF)
++dep_option(SDL_VIRTUAL_JOYSTICK    "Enable the virtual-joystick driver" ON "SDL_HIDAPI OR VISIONOS" OFF)
+ set_option(SDL_LIBUDEV             "Enable libudev support" ON)
+ set_option(SDL_ASAN                "Use AddressSanitizer to detect memory errors" OFF)
+ set_option(SDL_CCACHE              "Use Ccache to speed up build" OFF)
+diff --git a/libs/libpng/pngconf.h b/libs/libpng/pngconf.h
+index 24282ade..901c71c7 100644
+--- a/libs/libpng/pngconf.h
++++ b/libs/libpng/pngconf.h
+@@ -102,8 +102,10 @@
+  * on non-Mac platforms.
+  */
+ #ifndef MACOS
++/* TARGET_OS_MAC is set on every modern (Mach-based) Apple platform too; MACOS here means
++ * classic Mac OS, which needs <fp.h>. */
+ #if (defined(__MWERKS__) && defined(macintosh)) || defined(applec) || \
+-    defined(THINK_C) || defined(__SC__) || defined(TARGET_OS_MAC)
++    defined(THINK_C) || defined(__SC__) || (defined(TARGET_OS_MAC) && !defined(__MACH__))
+ #define MACOS
+ #endif
+ #endif
+diff --git a/libs/openal-soft/common/almalloc.cpp b/libs/openal-soft/common/almalloc.cpp
+index 68b5b63b..8a2f73b8 100644
+--- a/libs/openal-soft/common/almalloc.cpp
++++ b/libs/openal-soft/common/almalloc.cpp
+@@ -3,8 +3,14 @@
+ 
+ #if defined(__APPLE__)
+ #include <AvailabilityMacros.h>
+-
+-#if defined(MAC_OS_X_VERSION_MIN_REQUIRED) && MAC_OS_X_VERSION_MIN_REQUIRED < 101300
++#include <TargetConditionals.h>
++
++/* Only for macOS before 10.13, which lacks aligned new. AvailabilityMacros.h defines
++ * MAC_OS_X_VERSION_MIN_REQUIRED on other Apple platforms too, where these replacements would
++ * override the system's; their posix_memalign also rejects alignments below sizeof(void*), which
++ * made every EFX effect allocation fail on visionOS.
++ */
++#if TARGET_OS_OSX && defined(MAC_OS_X_VERSION_MIN_REQUIRED) && MAC_OS_X_VERSION_MIN_REQUIRED < 101300
+ 
+ #include <stdlib.h>
+ 
+diff --git a/libs/pure3d/CMakeLists.txt b/libs/pure3d/CMakeLists.txt
+index 352fa0f8..2db58676 100644
+--- a/libs/pure3d/CMakeLists.txt
++++ b/libs/pure3d/CMakeLists.txt
+@@ -169,7 +169,7 @@ target_include_directories(pddi PUBLIC "")
+ if(ANDROID OR SRR2_ENABLE_OPENXR)
+     target_include_directories(pddi PRIVATE "${CMAKE_SOURCE_DIR}/code")
+ endif()
+-if(SRR2_ENABLE_OPENXR AND NOT ANDROID AND SRR2_P3D_PDDI STREQUAL "VULKAN")
++if(SRR2_ENABLE_OPENXR AND NOT ANDROID AND NOT SRR2_VISIONOS AND SRR2_P3D_PDDI STREQUAL "VULKAN")
+ 	find_path(SRR2_OPENXR_INCLUDE_DIR openxr/openxr.h REQUIRED)
+ 	target_include_directories(pddi PRIVATE "${SRR2_OPENXR_INCLUDE_DIR}")
+ endif()
+diff --git a/libs/pure3d/p3d/platform/win32/platform.hpp b/libs/pure3d/p3d/platform/win32/platform.hpp
+index 14702005..2fb65895 100644
+--- a/libs/pure3d/p3d/platform/win32/platform.hpp
++++ b/libs/pure3d/p3d/platform/win32/platform.hpp
+@@ -10,7 +10,11 @@
+ #include <p3d/platform/win32/plat_types.hpp>
+ #include <pddi/pddi.hpp>
+ 
++#if defined(__APPLE__)
++#include <stdlib.h>
++#else
+ #include <malloc.h>
++#endif
+ 
+ static const int P3D_MAX_CONTEXTS = 4;
+ 
+diff --git a/libs/pure3d/pddi/vulkan/vkdevice.cpp b/libs/pure3d/pddi/vulkan/vkdevice.cpp
+index c8b89fe3..98a18937 100644
+--- a/libs/pure3d/pddi/vulkan/vkdevice.cpp
++++ b/libs/pure3d/pddi/vulkan/vkdevice.cpp
+@@ -7,6 +7,9 @@
+ #include <vr/vulkan/openxr_vulkan_context.h>
+ #include <vr/openxrmanager.h>
+ #include <pddi/vulkan/vktexture_resource.h>
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++#include <vr/visionos/visionos_mirror.h>
++#endif
+ 
+ #include <SDL.h>
+ #include <algorithm>
+@@ -78,6 +81,7 @@ std::shared_ptr<ExternalImage> LoadExternalImage(const std::string& path,bool fl
+         gExternalImageCache.erase(cached);
+     }
+     if(gMissingExternalImages.find(cacheKey)!=gMissingExternalImages.end()) return {};
++#if SDL_MAJOR_VERSION < 3
+     SDL_RWops* file=SDL_RWFromFile(path.c_str(),"rb");
+     if(!file) { gMissingExternalImages.insert(cacheKey);return {}; }
+     const Sint64 length=SDL_RWsize(file);
+@@ -85,6 +89,15 @@ std::shared_ptr<ExternalImage> LoadExternalImage(const std::string& path,bool fl
+     const bool readOk=!encoded.empty() &&
+         SDL_RWread(file,encoded.data(),1,encoded.size())==encoded.size();
+     SDL_RWclose(file);
++#else
++    SDL_IOStream* file=SDL_IOFromFile(path.c_str(),"rb");
++    if(!file) { gMissingExternalImages.insert(cacheKey);return {}; }
++    const Sint64 length=SDL_GetIOSize(file);
++    std::vector<unsigned char> encoded(length>0?static_cast<size_t>(length):0u);
++    const bool readOk=!encoded.empty() &&
++        SDL_ReadIO(file,encoded.data(),encoded.size())==encoded.size();
++    SDL_CloseIO(file);
++#endif
+     int width=0,height=0,channels=0;
+     unsigned char* decoded=readOk?stbi_load_from_memory(encoded.data(),
+         static_cast<int>(encoded.size()),&width,&height,&channels,4):NULL;
+@@ -109,9 +122,14 @@ std::shared_ptr<ExternalImage> FindExternalImage(const std::string& base,const c
+     const std::string filename=base+suffix+".png";
+ #if defined(SRR2_OPENXR_PLATFORM_WIN32)
+     static const std::string executableTextures=[]() {
++#if SDL_MAJOR_VERSION < 3
+         char* path=SDL_GetBasePath();
+         std::string result=path?std::string(path)+"custom/textures/":std::string();
+         SDL_free(path);
++#else
++        const char* path=SDL_GetBasePath(); // owned by SDL3; must not be freed
++        std::string result=path?std::string(path)+"custom/textures/":std::string();
++#endif
+         SDL_Log("Vulkan custom texture search: executable=%s; fallback=custom/textures/",
+                 result.c_str());
+         return result;
+@@ -148,9 +166,14 @@ std::shared_ptr<ExternalImage> FindExternalLightmap(const std::string& base)
+     const std::string filename=level+".lightmap.png";
+ #if defined(SRR2_OPENXR_PLATFORM_WIN32)
+     static const std::string executableLightmaps=[]() {
++#if SDL_MAJOR_VERSION < 3
+         char* path=SDL_GetBasePath();
+         std::string result=path?std::string(path)+"custom/lightmaps/":std::string();
+         SDL_free(path);
++#else
++        const char* path=SDL_GetBasePath(); // owned by SDL3; must not be freed
++        std::string result=path?std::string(path)+"custom/lightmaps/":std::string();
++#endif
+         SDL_Log("Vulkan custom lightmap search: executable=%s; fallback=custom/lightmaps/",
+                 result.c_str());
+         return result;
+@@ -464,6 +487,9 @@ public:
+     }
+     ~VulkanTexture() override
+     {
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++        SharVisionOS::ForgetMirrorObject(static_cast<pddiTexture*>(this));
++#endif
+         SharOpenXR::VulkanContext& context=SharOpenXR::GetVulkanContext();
+         for(unsigned i=0;i<10;++i)
+             if(descriptorSets[i] && descriptorSets[i]!=descriptorSet)
+@@ -994,6 +1020,9 @@ public:
+     { return lightMap?lightMap->GetDescriptorSet(uvMode,filterMode):VK_NULL_HANDLE; }
+     VkDescriptorSet GetPbrTextureSet() const
+     { return texture?texture->GetPbrDescriptorSet(uvMode,filterMode):VK_NULL_HANDLE; }
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    pddiTexture* GetBaseTexture() const { return texture; }
++#endif
+     void FillMaterialState(SharOpenXR::VulkanMaterialState* result) const
+     {
+         result->shaderClass=shaderClass;
+@@ -1180,6 +1209,9 @@ public:
+           hasAuthoredNormals(desc && (desc->GetVertexFormat()&PDDI_V_NORMAL)!=0) {}
+     ~VulkanPrimBuffer() override
+     {
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++        SharVisionOS::ForgetMirrorObject(this);
++#endif
+         SharOpenXR::GetVulkanContext().DestroyBuffer(vertexBuffer,vertexMemory);
+         SharOpenXR::GetVulkanContext().DestroyBuffer(indexBuffer,indexMemory);
+     }
+@@ -1199,6 +1231,12 @@ public:
+     uint32_t GetVertexCount() const { return static_cast<uint32_t>(vertices.size()); }
+     uint32_t GetIndexCount() const { return static_cast<uint32_t>(indices.size()); }
+     pddiPrimType GetPrimitiveType() const { return primitiveType; }
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    // For the shared-space window's scene mirror: the CPU copy, and a count of its uploads.
++    const VulkanVertex* GetVertices() const { return vertices.data(); }
++    const unsigned short* GetIndices() const { return indices.data(); }
++    uint32_t GetUploadVersion() const { return uploadVersion; }
++#endif
+ private:
+     void GenerateMissingNormals()
+     {
+@@ -1238,6 +1276,7 @@ private:
+     }
+     void UploadVertices()
+     {
++        ++uploadVersion;
+         if(vertices.empty()) return;
+         SharOpenXR::VulkanContext& context=SharOpenXR::GetVulkanContext();
+         const VkDeviceSize size=vertices.size()*sizeof(VulkanVertex);
+@@ -1270,6 +1309,7 @@ private:
+     }
+     void UploadIndices()
+     {
++        ++uploadVersion;
+         if(indices.empty()) return;
+         SharOpenXR::VulkanContext& context=SharOpenXR::GetVulkanContext();
+         const VkDeviceSize size=indices.size()*sizeof(unsigned short);
+@@ -1294,6 +1334,7 @@ private:
+     }
+     std::vector<VulkanVertex> vertices;
+     std::vector<unsigned short> indices;
++    uint32_t uploadVersion=0;
+     std::vector<unsigned char> memoryImage;
+     VulkanPrimBufferStream stream;
+     VkBuffer vertexBuffer=VK_NULL_HANDLE,indexBuffer=VK_NULL_HANDLE;
+@@ -1302,6 +1343,31 @@ private:
+     bool hasAuthoredNormals;
+ };
+ 
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++// The shared-space window's scene mirror takes what a draw is from here, and where it goes from
++// DrawPddiGeometry (vr/visionos/visionos_mirror.h). A null mesh is immediate geometry.
++struct MirrorScope
++{
++    MirrorScope(const void* mesh,uint32_t version,const VulkanVertex* vertices,uint32_t vertexCount,
++                const unsigned short* indices,uint32_t indexCount,pddiPrimType type,VulkanShader* shader)
++    {
++        if(!SharVisionOS::IsMirrorEnabled()) return;
++        SharVisionOS::MirrorSource source={};
++        source.mesh=mesh; source.version=version;
++        source.vertices=vertices; source.vertexCount=vertexCount;
++        source.indices=indices; source.indexCount=indexCount;
++        source.topology=type==PDDI_PRIM_TRIANGLES?0u:type==PDDI_PRIM_TRISTRIP?1u:2u;
++        source.texture=shader?shader->GetBaseTexture():nullptr;
++        source.textureMipmapped=source.texture && static_cast<pddiTexture*>(source.texture)->GetNumMipMaps()>0;
++        // pddiVulkanCopyTexturePixels is upstream's own texture readback, defined further down this file.
++        source.copyPixels=[](void* texture,std::vector<unsigned char>* pixels,unsigned* width,unsigned* height)
++        { return pddiVulkanCopyTexturePixels(static_cast<pddiTexture*>(texture),pixels,width,height); };
++        SharVisionOS::SetMirrorSource(&source);
++    }
++    ~MirrorScope() { SharVisionOS::SetMirrorSource(nullptr); }
++};
++#endif
++
+ class VulkanImmediateStream final : public pddiPrimStream
+ {
+ public:
+@@ -1596,6 +1662,10 @@ public:
+         bool uploaded=context.UploadTransientVertices(vertices.data(),size,&buffer,&vertexOffset);
+         const SharOpenXR::VulkanMaterialState material=MakeMaterialState(immediateShader);
+         const std::chrono::steady_clock::time_point drawStart=std::chrono::steady_clock::now();
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++        MirrorScope mirrorScope(nullptr,0,vertices.data(),static_cast<uint32_t>(vertices.size()),nullptr,0,
++                                immediateType,immediateShader);
++#endif
+         bool drawn=uploaded && context.DrawPddiGeometry(
+               target.image,target.format,target.width,target.height,target.arrayLayer,
+               buffer,VK_NULL_HANDLE,vertexOffset,static_cast<uint32_t>(vertices.size()),0,
+@@ -1626,6 +1696,10 @@ public:
+         VulkanShader* vulkanShader=static_cast<VulkanShader*>(shader);
+         const SharOpenXR::VulkanMaterialState material=MakeMaterialState(vulkanShader);
+         const std::chrono::steady_clock::time_point drawStart=std::chrono::steady_clock::now();
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++        MirrorScope mirrorScope(buffer,buffer->GetUploadVersion(),buffer->GetVertices(),buffer->GetVertexCount(),
++                                buffer->GetIndices(),buffer->GetIndexCount(),buffer->GetPrimitiveType(),vulkanShader);
++#endif
+         if(SharOpenXR::GetVulkanContext().DrawPddiGeometry(
+               target.image,target.format,target.width,target.height,target.arrayLayer,
+               buffer->GetVertexBuffer(),buffer->GetIndexBuffer(),
+diff --git a/libs/radcore/src/radcontroller/sdlcontroller.cpp b/libs/radcore/src/radcontroller/sdlcontroller.cpp
+index b6cb5c6f..4dc2f11b 100644
+--- a/libs/radcore/src/radcontroller/sdlcontroller.cpp
++++ b/libs/radcore/src/radcontroller/sdlcontroller.cpp
+@@ -1323,7 +1323,11 @@ class radControllerSDL
+             return false;
+         }
+ 
++#if SDL_MAJOR_VERSION < 3
+         if ( SDL_JoystickIsHaptic( pJoystick ) != SDL_TRUE )
++#else
++        if ( !SDL_IsJoystickHaptic( pJoystick ) )
++#endif
+         {
+ 
+             return false;
+@@ -1331,7 +1335,11 @@ class radControllerSDL
+ 
+         if ( m_pHaptic == NULL )
+         {
++#if SDL_MAJOR_VERSION < 3
+             m_pHaptic = SDL_HapticOpenFromJoystick( pJoystick );
++#else
++            m_pHaptic = SDL_OpenHapticFromJoystick( pJoystick );
++#endif
+             if ( m_pHaptic == NULL )
+             {
+ 
+@@ -1339,10 +1347,17 @@ class radControllerSDL
+             }
+         }
+ 
++#if SDL_MAJOR_VERSION < 3
+         if ( SDL_HapticRumbleInit( m_pHaptic ) != 0 )
+         {
+ 
+             SDL_HapticClose( m_pHaptic );
++#else
++        if ( !SDL_InitHapticRumble( m_pHaptic ) )
++        {
++
++            SDL_CloseHaptic( m_pHaptic );
++#endif
+             m_pHaptic = NULL;
+             return false;
+         }
+@@ -1363,7 +1378,11 @@ class radControllerSDL
+ 
+         if ( strength <= 0.0f )
+         {
++#if SDL_MAJOR_VERSION < 3
+             if ( SDL_HapticRumbleStop( m_pHaptic ) != 0 )
++#else
++            if ( !SDL_StopHapticRumble( m_pHaptic ) )
++#endif
+             {
+ 
+                 return false;
+@@ -1376,7 +1395,11 @@ class radControllerSDL
+         // Pequeña duración para que el poll la vaya renovando continuamente.
+         Uint32 durationMs = 50;
+ 
++#if SDL_MAJOR_VERSION < 3
+         if ( SDL_HapticRumblePlay( m_pHaptic, strength, durationMs ) != 0 )
++#else
++        if ( !SDL_PlayHapticRumble( m_pHaptic, strength, durationMs ) )
++#endif
+         {
+ 
+             return false;
+@@ -1965,7 +1988,11 @@ else
+     {
+     if ( m_pHaptic != NULL )
+     {
++#if SDL_MAJOR_VERSION < 3
+         SDL_HapticClose( m_pHaptic );
++#else
++        SDL_CloseHaptic( m_pHaptic );
++#endif
+         m_pHaptic = NULL;
+     }
+ }
+diff --git a/libs/radcore/src/radmemory/memorymanager.cpp b/libs/radcore/src/radmemory/memorymanager.cpp
+index 7d2235f6..1804eb85 100644
+--- a/libs/radcore/src/radmemory/memorymanager.cpp
++++ b/libs/radcore/src/radmemory/memorymanager.cpp
+@@ -698,6 +698,15 @@ void radMemoryFreeAligned(  radMemoryAllocator allocator, void * pAlignedMemory
+ 
+ void radMemoryFreeAligned( void * pMemory )
+ {
++#if defined( RAD_VISIONOS )
++    // Nothing comes from a game allocator before radMemoryInitialize(), so this is malloc memory,
++    // and the allocator tree is still empty (its root has no allocator to ask).
++    if ( !g_Initialized )
++    {
++        radMemoryPlatFreeAligned( pMemory );
++        return;
++    }
++#endif
+     LEAK_DETECTION_REMOVE_ALLOCATION( pMemory );
+     rAssert( g_Initialized == true );
+ 
+@@ -720,6 +729,15 @@ void radMemoryFreeAligned( void * pMemory )
+ 
+ void radMemoryFree( void * pMemory )
+ {
++#if defined( RAD_VISIONOS )
++    // Nothing comes from a game allocator before radMemoryInitialize(), so this is malloc memory,
++    // and the allocator tree is still empty (its root has no allocator to ask).
++    if ( !g_Initialized )
++    {
++        radMemoryPlatFree( pMemory );
++        return;
++    }
++#endif
+     LEAK_DETECTION_REMOVE_ALLOCATION( pMemory );
+     rAssert( g_Initialized == true );
+ 
+diff --git a/libs/radmovie/CMakeLists.txt b/libs/radmovie/CMakeLists.txt
+index 165c18b5..778f8c0c 100644
+--- a/libs/radmovie/CMakeLists.txt
++++ b/libs/radmovie/CMakeLists.txt
+@@ -117,7 +117,14 @@ target_link_libraries(radmovie
+ # Agregar OpenAL para Android si se necesita
+ if(ANDROID)
+     target_link_libraries(radmovie PRIVATE OpenAL)
+-	
++
++endif()
++# visionOS: OpenAL Soft is vendored, and FFmpeg comes from the pkg-config lookup at the top level.
++if(SRR2_VISIONOS)
++    target_link_libraries(radmovie PRIVATE OpenAL)
++    if(NOT SRR2_USE_BINK)
++        target_link_libraries(radmovie PRIVATE PkgConfig::FFmpeg)
++    endif()
+ endif()
+ # ✅ Linkear FFmpeg SOLO si NO usas Bink y estás en Android
+ # ✅ Android + FFmpeg: asegurar includes y libs
+diff --git a/libs/radsound/CMakeLists.txt b/libs/radsound/CMakeLists.txt
+index e0bc86e0..7b4edc15 100644
+--- a/libs/radsound/CMakeLists.txt
++++ b/libs/radsound/CMakeLists.txt
+@@ -22,7 +22,8 @@ set(RADSOUND_SOURCES
+ )
+ 
+ # Backend Win32 SOLO en Windows desktop
+-if(WIN32 OR ANDROID)
++# (It is the OpenAL HAL, which is why Android and visionOS use it too.)
++if(WIN32 OR ANDROID OR SRR2_VISIONOS)
+ 	list(APPEND RADSOUND_SOURCES
+ 		"src/hal/win32/buffer.cpp"
+ 		"src/hal/win32/bufferloader.cpp"

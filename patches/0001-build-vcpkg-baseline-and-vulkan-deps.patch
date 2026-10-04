@@ -1,0 +1,15 @@
+diff --git a/vcpkg.json b/vcpkg.json
+index 09de7ad4..8eb8743e 100644
+--- a/vcpkg.json
++++ b/vcpkg.json
+@@ -7,6 +7,9 @@
+     "libpng",
+     "openal-soft",
+     "openxr-loader",
++    "vulkan-headers",
++    "vulkan-loader",
+     "zlib"
+-  ]
++  ],
++  "builtin-baseline": "07f4812200df3d3c931c0c8a6081d3b21fe2bf9f"
+ }
