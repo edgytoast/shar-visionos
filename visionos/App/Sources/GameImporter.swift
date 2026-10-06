@@ -98,6 +98,7 @@ final class GameImporter: ObservableObject {
         } catch {
             return "Couldn't move the game files into place: \(error.localizedDescription)"
         }
+        GameData.excludeFromBackup()
 
         if ownsSource && !isDirectory.boolValue {
             try? fileManager.removeItem(at: source)

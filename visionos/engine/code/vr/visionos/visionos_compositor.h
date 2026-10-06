@@ -14,7 +14,12 @@ namespace SharVisionOS
     // Starts ARKit world tracking. Needs the layer renderer from SharVisionOS_Launch.
     bool InitializeCompositor();
     void ShutdownCompositor();
+    // Whether there's something to present to. While there isn't (the headset is off, neither the
+    // game's space nor its window is open, or the window is in the background), it holds the game
+    // thread here, with its sound paused and its rumble stopped.
     bool IsCompositorRunning();
+    // Whether the game has come back from being held since the last call.
+    bool ConsumeResumeFromHold();
 
     // The engine thread runs the game's own loop, with no autorelease pool: Objective-C objects
     // autoreleased during a frame (Metal, GameController, ARKit) would live until the thread exits.

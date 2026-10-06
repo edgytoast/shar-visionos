@@ -206,6 +206,43 @@ index 3e1a2328..6e2b877a 100644
          {
              // Heading is a direction (w=0), not a point (w=1).
              mVrBaseHeading.Rotate( yawMatrix );
+diff --git a/code/gameflow/gameflow.cpp b/code/gameflow/gameflow.cpp
+index deb4bb1c..8642f257 100644
+--- a/code/gameflow/gameflow.cpp
++++ b/code/gameflow/gameflow.cpp
+@@ -39,6 +39,9 @@
+ #include <main/game.h>
+ #include <memory/memoryutilities.h>
+ #include <memory/srrmemory.h>
++#ifdef RAD_VISIONOS
++#include <SDL.h>
++#endif
+ 
+ //******************************************************************************
+ //
+@@ -244,13 +247,19 @@ void GameFlow::OnTimerDone( unsigned int elapsedtime, void* pUserData )
+         }
+     }
+ 
+-    #ifndef RAD_RELEASE
++    #if !defined( RAD_RELEASE ) || defined( RAD_VISIONOS )
+ 
+-    // HACK to prevent elapsedtime from being ridiculously huge.  
+-    // This is so that when we set breakpoints we don't have really huge 
++    // HACK to prevent elapsedtime from being ridiculously huge.
++    // This is so that when we set breakpoints we don't have really huge
+     // elapsedtime values screwing us up.
++    // On visionOS the game thread is held while the headset is off or the game's space or window
++    // is closed, and that whole time would otherwise arrive as one frame: mission timers ran out
++    // and physics stepped by minutes.
+     if( elapsedtime > 1000 )
+     {
++    #ifdef RAD_VISIONOS
++        SDL_Log( "visionOS: a %u ms frame counts as 20 ms", elapsedtime );
++    #endif
+         elapsedtime = 20;
+     }
+     
 diff --git a/code/loading/p3dfilehandler.cpp b/code/loading/p3dfilehandler.cpp
 index 5b699036..91020cbe 100644
 --- a/code/loading/p3dfilehandler.cpp

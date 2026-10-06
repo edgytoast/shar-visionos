@@ -843,6 +843,11 @@ extern "C" bool SharVisionOS_MirrorAcquire(SharVisionOSMirrorFrame* frame)
 {
     {
         std::lock_guard<std::mutex> lock(gMutex);
+        // Nothing until the first frame is done. Its meshes and textures are queued as it draws,
+        // and the app drops an acquire with no frame: taken then, they were never sent again. A
+        // window opened mid-level (switched to from Full) records the whole level in its first
+        // frame, a few seconds of it, and showed black where those meshes should be.
+        if (gSerial == 0) return false;
         gAcquiredDraws = gLatest;
         gAcquiredVertices = gLatestVertices;
         gAcquiredIndices = gLatestIndices;

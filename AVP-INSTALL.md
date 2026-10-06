@@ -1,5 +1,9 @@
 # Installing SHAR VR on Apple Vision Pro
 
+SHAR VR is [Trevorbilt](https://trevorbilt.com)'s native visionOS port, built on
+[kote2345's VR mod](https://github.com/kote2345/The-Simpsons-Hit-and-Run-VR); the
+[README](README.md#credits) credits everyone it builds on.
+
 *The Simpsons: Hit & Run* runs natively on Apple Vision Pro once you build this project with Xcode
 and install it on your own headset. There's no ready-made app to download, and none of the game's
 files are here: you bring your own copy of the game.

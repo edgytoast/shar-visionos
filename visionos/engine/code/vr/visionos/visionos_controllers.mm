@@ -6,6 +6,7 @@
 // With neither a Sense controller nor a gamepad, bare hands stand in for them (ARKit hand
 // tracking): pinches and a fist are the buttons, and two pinch clutches are the sticks.
 #include <vr/visionos/visionos_compositor.h>
+#include <vr/visionos/visionos_entry.h>
 #include <vr/visionos/visionos_prompts.h>
 
 #import <ARKit/ARKit.h>
@@ -14,6 +15,7 @@
 #import <GameController/GameController.h>
 
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 #include <string>
 
@@ -229,10 +231,23 @@ float Pinch(simd_float3 thumb, simd_float3 finger)
     return Clamp01((kPinchNone - simd_distance(thumb, finger)) / (kPinchNone - kPinchFull));
 }
 
+// Set when the app comes back to the foreground (SharVisionOS_RetryHandTracking), where the player
+// may have just allowed hand tracking in Settings: a provider that was refused it never starts.
+std::atomic<bool> gRetryHandTracking{false};
+
 void StartHandTracking()
 {
     static bool tried = false;
-    if (tried) return;
+    const bool retry = gRetryHandTracking.exchange(false);
+    if (tried)
+    {
+        if (!retry || !gHandProvider || ar_data_provider_get_state(gHandProvider) == ar_data_provider_state_running)
+            return;
+        NSLog(@"[SharVisionOS] hand tracking isn't running; asking again");
+        ar_session_stop(gHandSession);
+        gHandSession = nil;
+        gHandProvider = nil;
+    }
     tried = true;
     if (!ar_hand_tracking_provider_is_supported())
     {
@@ -787,4 +802,9 @@ const char* DisableTutorialsText()
     label = ExpandButtons("{X} Disable Tutorials");
     return label.c_str();
 }
+}
+
+extern "C" void SharVisionOS_RetryHandTracking(void)
+{
+    gRetryHandTracking = true;
 }

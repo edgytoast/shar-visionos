@@ -13,6 +13,7 @@ struct GameWindowView: View {
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.scenePhase) private var scenePhase
     @State private var updates: EventSubscription?
 
     var body: some View {
@@ -64,6 +65,23 @@ struct GameWindowView: View {
         .onDisappear {
             SharVisionOS_SetWindowActive(false)
             GameScenes.windowClosed()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // In the background: the game holds, as it does with the headset off in the immersive
+            // space, rather than rendering on where visionOS may refuse the GPU work. Only there:
+            // whether visionOS also reports .inactive during play (a glance at Control Center or a
+            // notification) is unchecked on the headset, and holding then would pause the game.
+            SharVisionOS_SetWindowVisible(phase != .background)
+        }
+        .task {
+            // Headless Simulator runs: SHAR_TEST_WINDOW_HIDE="40~10" puts the window in the
+            // background 40 s after it opens, for 10 s, as leaving it would.
+            let spec = (TestHooks.value("SHAR_TEST_WINDOW_HIDE") ?? "").split(separator: "~").compactMap { Double($0) }
+            guard spec.count == 2 else { return }
+            try? await Task.sleep(for: .seconds(spec[0]))
+            SharVisionOS_SetWindowVisible(false)
+            try? await Task.sleep(for: .seconds(spec[1]))
+            SharVisionOS_SetWindowVisible(true)
         }
     }
 }

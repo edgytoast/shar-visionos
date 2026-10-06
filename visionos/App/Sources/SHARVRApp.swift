@@ -1,5 +1,6 @@
 import AVFAudio
 import CompositorServices
+import os
 import SwiftUI
 
 @main
@@ -16,6 +17,9 @@ struct SHARVRApp: App {
         } catch {
             print("[SHARVR] setIntendedSpatialExperience(.bypassed) failed: \(error)")
         }
+        GameAudio.observeInterruptions()
+        MemoryWatch.start()
+        GameData.excludeFromBackup()
         SharVisionOS_SetViewHandler { mode in
             Task { @MainActor in await GameScenes.present(mode) }
         }
@@ -180,5 +184,90 @@ enum GameData {
               isDirectory.boolValue,
               let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { return false }
         return names.contains { $0.lowercased().hasSuffix(".rcf") }
+    }
+
+    // The game's own files, about 2 GB the player can always copy in again, stay out of iCloud
+    // backups: its folders and its .rcf archives. Anything else here, saves included, is backed
+    // up as usual. Marking a folder covers what's in it.
+    nonisolated static func excludeFromBackup() {
+        let folders: Set<String> = ["art", "movies", "scripts", "sound"]
+        guard let items = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        else { return }
+        for var item in items {
+            let name = item.lastPathComponent.lowercased()
+            guard folders.contains(name) || name.hasSuffix(".rcf") else { continue }
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try? item.setResourceValues(values)
+        }
+    }
+}
+
+// visionOS interrupts the app's audio for Siri, calls and alarms. The game's sound pauses for the
+// interruption and comes back once the audio session is active again. The end isn't always
+// announced, so coming back to the foreground tries too.
+@MainActor
+enum GameAudio {
+    private static var interrupted = false
+    private static var observers: [NSObjectProtocol] = []
+
+    static func observeInterruptions() {
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification,
+                                            object: AVAudioSession.sharedInstance(), queue: .main) { note in
+            let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            let type = raw.flatMap(AVAudioSession.InterruptionType.init(rawValue:))
+            MainActor.assumeIsolated {
+                if type == .began { began() } else if type == .ended { resume(attempts: 5) }
+            }
+        })
+        observers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification,
+                                            object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { resume(attempts: 5) }
+        })
+    }
+
+    private static func began() {
+        guard !interrupted else { return }
+        interrupted = true
+        print("[SHARVR] audio interrupted")
+        SharVisionOS_SetAudioInterrupted(true)
+    }
+
+    // Reactivates the session, then the game's sound. While another app still has the audio, it
+    // tries again a second later, a few times; coming back to the foreground starts over.
+    private static func resume(attempts: Int) {
+        guard interrupted else { return }
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+            interrupted = false
+            print("[SHARVR] audio interruption over")
+            SharVisionOS_SetAudioInterrupted(false)
+        } catch {
+            print("[SHARVR] the audio session isn't back yet: \(error.localizedDescription)")
+            guard attempts > 1 else { return }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1))
+                resume(attempts: attempts - 1)
+            }
+        }
+    }
+}
+
+// Logs visionOS's memory warnings with what's left before its limit, so a session that ends early
+// can be told apart from a crash.
+@MainActor
+enum MemoryWatch {
+    private static var source: DispatchSourceMemoryPressure?
+
+    static func start() {
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { [weak source] in
+            guard let event = source?.data else { return }
+            print("[SHARVR] memory pressure (\(event.contains(.critical) ? "critical" : "warning")): "
+                  + "\(os_proc_available_memory() / 1_048_576) MB left")
+        }
+        source.resume()
+        Self.source = source
     }
 }

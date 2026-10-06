@@ -49,6 +49,17 @@ void SharVisionOS_SetWindowActive(bool active);
 void SharVisionOS_WindowTick(void);
 // The window's width in metres, which sets how far apart the engine's eyes are.
 void SharVisionOS_SetWindowWidth(float metres);
+// Whether the window's scene is in the foreground. While it isn't (in the background), the engine
+// holds the game as it does with the headset off: no frames, no GPU work, no sound.
+void SharVisionOS_SetWindowVisible(bool visible);
+
+// visionOS interrupted the app's audio (Siri, a call, an alarm), or the interruption ended: the
+// game's sound pauses until then. Reactivate the audio session before saying it ended.
+void SharVisionOS_SetAudioInterrupted(bool interrupted);
+
+// The app is back in the foreground, where the player may have just allowed hand tracking in
+// Settings: if bare hands aren't being tracked, the engine asks again and restarts tracking.
+void SharVisionOS_RetryHandTracking(void);
 // The latest finished frame's serial (0 before the first), each eye's picture size and the HUD's.
 uint64_t SharVisionOS_WindowFrame(int* _Nullable eyeWidth, int* _Nullable eyeHeight, int* _Nullable hudWidth,
                                   int* _Nullable hudHeight);
@@ -196,7 +207,7 @@ typedef struct
 } SharVisionOSMirrorFrame;
 
 // Takes the latest frame's draws and every mesh, texture and removal since the last call; the
-// pointers stay valid until the next. Main thread.
+// pointers stay valid until the next. False, taking nothing, until the first frame. Main thread.
 bool SharVisionOS_MirrorAcquire(SharVisionOSMirrorFrame* _Nonnull frame);
 
 #ifdef __cplusplus

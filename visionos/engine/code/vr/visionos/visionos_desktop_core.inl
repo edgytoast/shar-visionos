@@ -5,6 +5,9 @@
 // implementation behind them changes, to CompositorServices via visionos_compositor.h. OpenXR
 // handles the glue checks before using OpenXR-only features (refresh rate, haptics) stay null.
 #include <vr/visionos/visionos_compositor.h>
+#include <gameflow/gameflow.h>
+#include <presentation/gui/ingame/guimanageringame.h>
+#include <presentation/gui/ingame/guiscreenhud.h>
 #include <render/breakables/breakablesmanager.h>
 #include <worldsim/avatar.h>
 #include <worldsim/avatarmanager.h>
@@ -278,12 +281,29 @@ bool IsRuntimeReady()
     return initialized&&SharVisionOS::IsCompositorRunning();
 }
 
+// Back from being held (the headset off, the game's space or window closed or in the background),
+// play comes back on the pause menu rather than straight into traffic, as a console's does when
+// its controller reconnects. Only from the running HUD, where Start pauses: paused mid iris wipe
+// (going in or out of a building) or mid conversation, resuming returned to that screen with the
+// game still paused, and the wipe never finished.
+static void PauseAfterHold()
+{
+    if(GetGameFlow()->GetCurrentContext()!=CONTEXT_GAMEPLAY||GetGameFlow()->GetNextContext()!=CONTEXT_GAMEPLAY)return;
+    CGuiSystem* gui=GetGuiSystem();
+    CGuiManagerInGame* inGame=gui?gui->GetInGameManager():NULL;
+    if(!inGame||inGame->GetCurrentScreen()!=CGuiWindow::GUI_SCREEN_ID_HUD)return;
+    CGuiScreenHud* hud=GetCurrentHud();
+    if(!hud||!hud->IsActive())return;
+    inGame->HandleMessage(GUI_MSG_PAUSE_INGAME);
+}
+
 bool BeginFrame()
 {
     SharVisionOS::DrainFrameAutoreleasePool();
     SharedHudBeginFrame();
     cullingBaseValid=false;
     if(!IsRuntimeReady())return false;
+    if(SharVisionOS::ConsumeResumeFromHold())PauseAfterHold();
 
     // Free what the engine retired last frame (the previous EndFrame drained the queue).
     GetVulkanContext().ReleaseRetiredResources();

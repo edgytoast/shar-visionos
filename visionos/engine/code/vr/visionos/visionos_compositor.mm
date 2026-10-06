@@ -15,6 +15,8 @@
 
 #include <SDL.h>
 #include <SDL_main.h>
+#include <AL/alc.h>
+#include <AL/alext.h>
 
 #include <mach/mach.h>
 #include <os/proc.h>
@@ -280,6 +282,7 @@ id<MTLTexture> ExportTexture(VkImage image)
 // visionos_window.h), one frame per RealityKit update of the app's window. Each finished frame goes
 // into one of three sets the app copies from.
 std::atomic<bool> gWindowActive{false};
+std::atomic<bool> gWindowVisible{true};  // its scene isn't in the background (else the game is held)
 std::atomic<float> gWindowWidth{1.2f};  // metres, from the app
 dispatch_semaphore_t gWindowTick = dispatch_semaphore_create(0);
 bool gWindowFrame = false;   // the frame in progress is for the window
@@ -288,6 +291,34 @@ std::mutex gWindowMutex;     // guards the frame bookkeeping below
 SharVisionOS::WindowFrameOutput gWindowFrames[3];
 int gWindowLatest = -1, gWindowReading = -1;
 uint64_t gWindowSerial = 0;
+
+// The game's sound stops while the game is held (IsCompositorRunning) and while visionOS has
+// interrupted the app's audio. A held game thread stops refilling its sound streams, so their last
+// few seconds looped; after an interruption, nothing restarts the output. Pausing OpenAL Soft's
+// device (ALC_SOFT_pause_device) stops mixing and the output, and resuming starts both again.
+enum : uint32_t { kSoundHeldForGame = 1, kSoundHeldForInterruption = 2 };
+std::mutex gSoundMutex;
+uint32_t gSoundHolds = 0;
+
+void HoldSound(uint32_t reason, bool hold)
+{
+    std::lock_guard<std::mutex> lock(gSoundMutex);
+    const uint32_t before = gSoundHolds;
+    gSoundHolds = hold ? before | reason : before & ~reason;
+    if ((before != 0) == (gSoundHolds != 0)) return;
+    ALCcontext* context = alcGetCurrentContext();
+    ALCdevice* device = context ? alcGetContextsDevice(context) : nullptr;
+    if (!device || !alcIsExtensionPresent(device, "ALC_SOFT_pause_device")) return;
+    if (gSoundHolds)
+        reinterpret_cast<LPALCDEVICEPAUSESOFT>(alcGetProcAddress(device, "alcDevicePauseSOFT"))(device);
+    else
+        reinterpret_cast<LPALCDEVICERESUMESOFT>(alcGetProcAddress(device, "alcDeviceResumeSOFT"))(device);
+    NSLog(@"[SharVisionOS] sound %s", gSoundHolds ? "paused" : "resumed");
+}
+
+// Set when the game comes back from being held; the game reads it (ConsumeResumeFromHold) to come
+// back on its pause menu.
+std::atomic<bool> gResumedFromHold{false};
 
 // The scene before the HUD, which the engine copies here at its HDR resolve (matches the engine
 // texture).
@@ -429,7 +460,21 @@ extern "C" void SharVisionOS_SetWindowActive(bool active)
 {
     std::lock_guard<std::mutex> lock(gRendererMutex);
     gWindowActive = active;
+    // A window that opens is in the foreground.
+    if (active) gWindowVisible = true;
     gRendererArrived.notify_all();
+}
+
+extern "C" void SharVisionOS_SetWindowVisible(bool visible)
+{
+    std::lock_guard<std::mutex> lock(gRendererMutex);
+    gWindowVisible = visible;
+    gRendererArrived.notify_all();
+}
+
+extern "C" void SharVisionOS_SetAudioInterrupted(bool interrupted)
+{
+    HoldSound(kSoundHeldForInterruption, interrupted);
 }
 
 extern "C" void SharVisionOS_WindowTick(void)
@@ -600,10 +645,31 @@ void ShutdownCompositor()
     gEngineTextures[0] = gEngineTextures[1] = nil;
 }
 
+bool ConsumeResumeFromHold()
+{
+    return gResumedFromHold.exchange(false);
+}
+
 bool IsCompositorRunning()
 {
     // Frames go to whichever is open: the game's window, else its immersive space. The app opens
-    // one before closing the other. With neither, the game holds here until one opens.
+    // one before closing the other. With neither, the game holds here until one opens; also while
+    // the space is paused (the headset off) or the window is in the background. A held game makes
+    // no sound and no rumble.
+    bool held = false;
+    const auto hold = [&held] {
+        if (held) return;
+        held = true;
+        SetRumble(0, 0);
+        HoldSound(kSoundHeldForGame, true);
+    };
+    const auto resume = [&held] {
+        if (!held) return true;
+        HoldSound(kSoundHeldForGame, false);
+        gResumedFromHold = true;
+        NSLog(@"[SharVisionOS] the game resumes");
+        return true;
+    };
     for (;;)
     {
         {
@@ -628,21 +694,34 @@ bool IsCompositorRunning()
             }
             NSLog(@"[SharVisionOS] presenting to the %s", window ? "window" : "immersive space");
         }
-        if (window) return true;
+        if (window)
+        {
+            if (gWindowVisible) return resume();
+            // Hidden or in the background, where visionOS may refuse the GPU work: wait for it to
+            // come back (or close) rather than rendering on.
+            NSLog(@"[SharVisionOS] the game's window is in the background; held until it's back");
+            hold();
+            std::unique_lock<std::mutex> lock(gRendererMutex);
+            gRendererArrived.wait(lock, [] { return gWindowVisible || !gWindowActive || gNextRenderer != nil; });
+            continue;
+        }
         if (gRenderer && cp_layer_renderer_get_state(gRenderer) != cp_layer_renderer_state_invalidated)
         {
             switch (cp_layer_renderer_get_state(gRenderer))
             {
                 case cp_layer_renderer_state_paused:
+                    hold();
                     cp_layer_renderer_wait_until_running(gRenderer);
-                    return cp_layer_renderer_get_state(gRenderer) == cp_layer_renderer_state_running;
+                    // Running again, or invalidated (the space closed): the loop sees which.
+                    continue;
                 case cp_layer_renderer_state_running:
-                    return true;
+                    return resume();
                 default:
                     return false;
             }
         }
         NSLog(@"[SharVisionOS] nothing to present to; paused until the game's space or window opens");
+        hold();
         std::unique_lock<std::mutex> lock(gRendererMutex);
         gRendererArrived.wait(lock, [] { return gNextRenderer != nil || gWindowActive; });
     }

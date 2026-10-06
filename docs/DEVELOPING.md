@@ -97,6 +97,8 @@ them; `SHAR_PRESENT_EVENT`, the launcher's toggle, is the one that works everywh
 | `SHAR_TEST_EVENTS="break:19@55 coins:5@58"` | Plays a breakable by the player (IDs in upstream's `code/constants/breakablesenum.h`: 19 is Krusty glass, 24 a car explosion) or drops coins, that many seconds in. Also `scale:50@40` (Render Scale), `aa:1@40` (Anti-Aliasing), `view:2@40` (View) and `turn:90@40` (turns the view right, as a Digital Crown recentre would). Times count from the game's first frame. |
 | `SHAR_PRESENT_EVENT=1` | The launcher's "Pace frames on the GPU". |
 | `SHAR_TEST_WINDOW_TILT=25` | Turns the Window view's content 25 degrees, to see its depth from the side without moving the Simulator's camera. |
+| `SHAR_TEST_NO_INPUT=1` | Shows the launcher as if no controller were connected and hand tracking were denied (the Simulator always has a gamepad), to check what it says then. |
+| `SHAR_TEST_WINDOW_HIDE=40~10` | Puts the Window view in the background 40 seconds after it opens, for 10 seconds, as leaving it would: the game holds (no frames, sound paused) and comes back on its pause menu. |
 | `SHAR_TEST_WINDOW_RELIEF=1` | Shows the Window view's older depth-relief picture instead of the scene mirror (`SHAR_TEST_WINDOW_LAYERS=pb` picks its layers). |
 
 For example:
