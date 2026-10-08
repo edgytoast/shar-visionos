@@ -12,7 +12,9 @@
 #include <worldsim/avatar.h>
 #include <worldsim/avatarmanager.h>
 #include <worldsim/coins/coinmanager.h>
+#include <SDL.h>
 #include <TargetConditionals.h>
+#include <cstdio>
 #include <sstream>
 #include <string>
 
@@ -86,8 +88,19 @@ static void SyncGamepadInput()
     SharVisionOS::GamepadState pad;
     // Sense controllers, else a gamepad, else bare hands (not while a gamepad's held: its hands
     // would pinch and swing).
-    if(!SharVisionOS::ReadSpatialControllers(&pad) && !SharVisionOS::ReadGamepad(&pad) &&
-       (SharVisionOS::IsWindowPresentation() || !SharVisionOS::ReadBareHands(&pad)))
+    const bool fromController=SharVisionOS::ReadSpatialControllers(&pad) || SharVisionOS::ReadGamepad(&pad);
+    const bool bareHands=!fromController && !SharVisionOS::IsWindowPresentation() && SharVisionOS::ReadBareHands(&pad);
+    // The VR wheel: bare hands hold it by touching it (openxr_shared_vehicle.cpp).
+    GetSharedVrState().bareHandsInput=bareHands;
+    if(bareHands)
+    {
+        // The walking clutch pushed all the way is the stick's click, to run. In a car that click
+        // is the horn, and steering hard is pushing all the way: every sharp turn honked.
+        AvatarManager* avatars=AvatarManager::GetInstance();
+        Avatar* avatar=avatars?avatars->GetAvatarForPlayer(0):NULL;
+        if(avatar&&avatar->IsInCar())pad.leftStickClick=0;
+    }
+    if(!fromController&&!bareHands)
     {
         if(gamepadActive)
         {
@@ -194,23 +207,70 @@ static void RunTestEvents()
     }
 }
 
+static std::string PreferenceFile(const char* name)
+{
+    char* base=SDL_GetPrefPath("c4rlox","simpsons");
+    if(!base)return std::string();
+    std::string path(base);
+    SDL_free(base);
+    return path+name;
+}
+
+// Beside the game's settings: there while the window has switched VR mode off. The settings save
+// Original mode with the rest, so after quitting in the window, Full and Progressive started in it
+// next time (no bare hands, no Sense layout); this is how the next launch knows to switch back.
+static std::string WindowOriginalModeMarker()
+{
+    return PreferenceFile("visionos-window-original-mode");
+}
+
+// Builds from before the marker left Original mode saved after any Window session, with nothing to
+// say the window chose it. Once, on the first launch of a build with the marker, VR mode comes back
+// (a mode chosen in the VR menu from then on is kept).
+static bool TakeOriginalModeMigration()
+{
+    const std::string done=PreferenceFile("visionos-vr-mode-restored");
+    if(FILE* marker=std::fopen(done.c_str(),"r")){std::fclose(marker);return false;}
+    if(FILE* marker=std::fopen(done.c_str(),"w"))std::fclose(marker);
+    return true;
+}
+
 // The VR menu's View: full immersion, progressive, or the game's window in the shared space. The
 // window has no head or controller tracking (visionOS keeps those to Full Spaces), so it plays in
 // Original mode, third person; VR mode comes back when the game returns to the immersive space.
 static void UpdateView()
 {
     SharedVrState& s=GetSharedVrState();
-    static bool restoreVrMode=false;
+    static bool restoreVrMode=false,markerRead=false;
+    if(!markerRead)
+    {
+        markerRead=true;
+        if(FILE* marker=std::fopen(WindowOriginalModeMarker().c_str(),"r"))
+        {
+            std::fclose(marker);
+            restoreVrMode=true;
+        }
+        if(TakeOriginalModeMigration()&&!s.vrModeEnabled)
+        {
+            // Kept in the window's marker until it's done: a first launch into the window, quit there,
+            // would otherwise use it up without restoring anything.
+            if(FILE* marker=std::fopen(WindowOriginalModeMarker().c_str(),"w"))std::fclose(marker);
+            SDL_Log("visionOS: VR mode to be restored once (an older build saved the window's Original mode)");
+            restoreVrMode=true;
+        }
+    }
     s.flatWindowActive=SharVisionOS::IsWindowPresentation();
     s.flatWindowTangent=SharVisionOS::WindowHalfHeightTangent();
     if(s.flatWindowActive&&s.vrModeEnabled)
     {
+        if(FILE* marker=std::fopen(WindowOriginalModeMarker().c_str(),"w"))std::fclose(marker);
         SetSharedVrModeEnabled(false);
         restoreVrMode=true;
     }
     else if(!s.flatWindowActive&&restoreVrMode)
     {
         SetSharedVrModeEnabled(true);
+        std::remove(WindowOriginalModeMarker().c_str());
         restoreVrMode=false;
     }
     SharVisionOS::SetView(s.viewMode);

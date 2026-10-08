@@ -88,7 +88,8 @@ uint64_t SharVisionOS_WindowFrame(int* _Nullable eyeWidth, int* _Nullable eyeHei
 void SharVisionOS_CopyWindowFrame(id<MTLCommandBuffer> _Nonnull commands, id<MTLTexture> _Nonnull colour,
                                   id<MTLTexture> _Nonnull hud, NSArray<id<MTLBuffer>>* _Nonnull positions,
                                   NSArray<id<MTLBuffer>>* _Nonnull indices);
-// With the scene mirror, only the HUD (premultiplied alpha) is needed from each frame.
+// With the scene mirror, only the HUD (premultiplied alpha) is needed from each frame. Into the HUD's
+// top level; a mipmapped HUD texture gets its other levels regenerated.
 void SharVisionOS_CopyWindowHud(id<MTLCommandBuffer> _Nonnull commands, id<MTLTexture> _Nonnull hud);
 #endif
 

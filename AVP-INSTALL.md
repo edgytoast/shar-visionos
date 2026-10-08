@@ -89,7 +89,8 @@ compiler cache, if you've installed ccache) it writes only inside this folder, o
 4. **Add your game files**, any one of these ways:
    - AirDrop the zipped folder to your Vision Pro and choose **SHAR VR** from the apps to open it
      with. The app unpacks it, installs it, and deletes the AirDropped copy.
-   - Put the archive or folder anywhere Files can reach, then tap **Import Game Files…** in SHAR VR.
+   - Put the archive or folder anywhere Files can reach, then tap **Import game files** in SHAR VR
+     (once a copy is in, it's under **Manage**).
    - Copy what's inside the game folder (`art`, the `.rcf` files and the rest) straight into SHAR
      VR's own folder in Files (On My Apple Vision Pro › SHAR VR).
 5. **Play.** Pick a view (Full, Progressive or Window) and tap **Play**.
@@ -102,11 +103,13 @@ Xcode. Your game files and saves stay on the headset.
 - **Full and Progressive:** PS VR2 Sense controllers and gamepads use the VR mod's layout, and the
   game's tutorials name the buttons on whatever you're holding. Swing a tracked hand to attack. With
   no controller connected, your bare hands play: pinches are the buttons and a held pinch, moved,
-  walks and turns (the [README](README.md#play) has the full table).
+  walks and turns. The launcher's **Controls** tab shows every control, with drawings of the
+  hand gestures; the [README](README.md#play) has them too.
 - **Window:** it plays like the original game, so it needs a controller and takes the original
   layout: A jumps, B sprints, X attacks, Y talks and gets in and out of cars, and when you're
   driving, the right trigger is gas and the left one brakes. Look at the game window to give it
-  your controller; visionOS sends a controller's input to the window you're looking at.
+  your controller: visionOS sends a controller's input to the window you're looking at (SHAR VR's
+  own launcher leaves it with the game).
 - **Settings:** the game's VR menu has View (switch between Full, Progressive and Window, even
   mid-game) and Move Direction; its Graphics menu has Anti-Aliasing and Render Scale.
 
@@ -114,7 +117,7 @@ Known issues:
 
 - The Window view recreates the game's scene in visionOS's own renderer, so it has no sun shadows
   and no distant haze, and blob shadows sit just off the ground.
-- "Pace frames on the GPU", in the launcher, is experimental. If Full or Progressive ever shows
+- "Pace frames on the GPU", under the launcher's Advanced, is experimental. If Full or Progressive ever shows
   nothing, quit the app, open it again, and turn it off before pressing Play.
 - Apps signed with a free Apple Account stop opening after 7 days. Run it from Xcode again; your
   game files and saves stay.

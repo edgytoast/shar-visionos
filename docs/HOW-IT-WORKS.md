@@ -10,7 +10,7 @@ on it, [DEVELOPING.md](DEVELOPING.md).
 
 ```
 SwiftUI app (visionos/App)                       main thread
-  ├─ Launcher window: import the game, choose a view, Play
+  ├─ Launcher window (TrevorbiltKit): Play (import, view), Controls, Ports, About
   ├─ ImmersiveSpace (Full: .full or .mixed; Progressive: .progressive)
   │    └─ CompositorLayer ─▶ its LayerRenderer goes to the engine
   └─ Window (View: Window): a RealityKit scene behind a portal

@@ -290,6 +290,8 @@ float gWindowEyeOffset = 0;  // the frame in progress's, game metres
 std::mutex gWindowMutex;     // guards the frame bookkeeping below
 SharVisionOS::WindowFrameOutput gWindowFrames[3];
 int gWindowLatest = -1, gWindowReading = -1;
+bool gWindowWriting[3] = {false, false, false};  // a frame's GPU work is still writing the set
+unsigned gWindowSlotReuses = 0;                  // since the last stats line: see EndWindowFrame
 uint64_t gWindowSerial = 0;
 
 // The game's sound stops while the game is held (IsCompositorRunning) and while visionOS has
@@ -499,6 +501,16 @@ extern "C" uint64_t SharVisionOS_WindowFrame(int* eyeWidth, int* eyeHeight, int*
     return gWindowSerial;
 }
 
+// The HUD's top level, then its mipmaps: the window shows it smaller than it's drawn, most of all
+// far off or at an angle, and with one level its text and menus sparkled. Its alpha is
+// premultiplied, so the levels average correctly.
+static void CopyWindowHudLevels(id<MTLBlitCommandEncoder> blit, id<MTLTexture> from, id<MTLTexture> to)
+{
+    [blit copyFromTexture:from sourceSlice:0 sourceLevel:0 toTexture:to destinationSlice:0 destinationLevel:0
+               sliceCount:1 levelCount:1];
+    if (to.mipmapLevelCount > 1) [blit generateMipmapsForTexture:to];
+}
+
 extern "C" void SharVisionOS_CopyWindowFrame(id<MTLCommandBuffer> commands, id<MTLTexture> colour, id<MTLTexture> hud,
                                              NSArray<id<MTLBuffer>>* positions, NSArray<id<MTLBuffer>>* indices)
 {
@@ -522,7 +534,7 @@ extern "C" void SharVisionOS_CopyWindowFrame(id<MTLCommandBuffer> commands, id<M
     {
         id<MTLBlitCommandEncoder> blit = [commands blitCommandEncoder];
         [blit copyFromTexture:frame.colour toTexture:colour];
-        [blit copyFromTexture:frame.hud toTexture:hud];
+        CopyWindowHudLevels(blit, frame.hud, hud);
         for (NSUInteger i = 0; i < 6; ++i)
             [blit copyFromBuffer:frame.positions sourceOffset:i * layerSize toBuffer:positions[i] destinationOffset:0
                             size:layerSize];
@@ -542,6 +554,13 @@ extern "C" void SharVisionOS_CopyWindowFrame(id<MTLCommandBuffer> commands, id<M
             pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, texture == colour ? 1 : 0);
             pass.colorAttachments[0].storeAction = MTLStoreActionStore;
             [[commands renderCommandEncoderWithDescriptor:pass] endEncoding];
+        }
+        // The clear is level 0's: the HUD's other levels from it.
+        if (hud.mipmapLevelCount > 1)
+        {
+            id<MTLBlitCommandEncoder> blit = [commands blitCommandEncoder];
+            [blit generateMipmapsForTexture:hud];
+            [blit endEncoding];
         }
     }
     [commands addCompletedHandler:^(id<MTLCommandBuffer>) {
@@ -564,7 +583,7 @@ extern "C" void SharVisionOS_CopyWindowHud(id<MTLCommandBuffer> commands, id<MTL
     if (frame.hud && frame.hud.width == hud.width && frame.hud.height == hud.height)
     {
         id<MTLBlitCommandEncoder> blit = [commands blitCommandEncoder];
-        [blit copyFromTexture:frame.hud toTexture:hud];
+        CopyWindowHudLevels(blit, frame.hud, hud);
         [blit endEncoding];
     }
     [commands addCompletedHandler:^(id<MTLCommandBuffer>) {
@@ -1081,6 +1100,13 @@ void RecordFrameStats()
               gStats.frames / (now - gStats.windowStart), gStats.busyTotal / gStats.frames * 1000.0,
               gStats.busyMax * 1000.0, gStats.late, gStats.frames, fenceWait / gStats.frames, presented, footprint,
               gQueue.device.currentAllocatedSize / 1048576.0, os_proc_available_memory() / 1048576.0);
+        {
+            std::lock_guard<std::mutex> lock(gWindowMutex);
+            if (gWindowSlotReuses)
+                NSLog(@"[SharVisionOS] window frames: %u written into a set the last frame was still writing",
+                      gWindowSlotReuses);
+            gWindowSlotReuses = 0;
+        }
         gStats = FrameStats();
         gStats.windowStart = now;
     }
@@ -1111,16 +1137,22 @@ void EndWindowFrame()
         {
             std::lock_guard<std::mutex> lock(gWindowMutex);
             while (slot == gWindowLatest || slot == gWindowReading) ++slot;
+            // S23 probe: the set the last frame is still writing isn't excluded, so this frame can
+            // write it too while the last frame's completion publishes it to the window.
+            if (gWindowWriting[slot]) ++gWindowSlotReuses;
+            gWindowWriting[slot] = true;
         }
         id<MTLCommandBuffer> commands = [gQueue commandBuffer];
         id<MTLTexture> colour = input.scene ? input.scene : input.final;
         if (gPresent.antiAliasing == 2) colour = EncodeAntiAliasing(commands, colour, 2);
-        if (EncodeWindowFrame(commands, input, colour, gWindowFrames[slot]))
-            [commands addCompletedHandler:^(id<MTLCommandBuffer>) {
-                std::lock_guard<std::mutex> lock(gWindowMutex);
-                gWindowLatest = slot;
-                ++gWindowSerial;
-            }];
+        const bool encoded = EncodeWindowFrame(commands, input, colour, gWindowFrames[slot]);
+        [commands addCompletedHandler:^(id<MTLCommandBuffer>) {
+            std::lock_guard<std::mutex> lock(gWindowMutex);
+            gWindowWriting[slot] = false;
+            if (!encoded) return;
+            gWindowLatest = slot;
+            ++gWindowSerial;
+        }];
         [commands commit];
         RecordFrameStats();
     }

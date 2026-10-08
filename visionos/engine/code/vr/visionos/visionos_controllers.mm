@@ -220,7 +220,12 @@ Clutch gClutches[2];  // [0] walks (left middle), [1] turns (right little)
 constexpr float kPinchFull = 0.015f, kPinchNone = 0.045f;      // thumb to fingertip, metres
 constexpr float kCurlOpen = 0.17f, kCurlClosed = 0.08f;         // middle tip to wrist
 constexpr float kClutchStart = 0.8f, kClutchEnd = 0.5f;
-constexpr float kClutchRange = 0.08f, kClutchDeadzone = 0.012f, kClutchTapTravel = 0.02f;
+// Full tilt 14 cm from where the pinch began: at 8 cm, with the VR layer's own stick deadzone on
+// top (below), all of it happened in about 5 cm and steering was twitchy.
+constexpr float kClutchRange = 0.14f, kClutchDeadzone = 0.015f, kClutchTapTravel = 0.02f;
+// The VR layer zeroes a stick below 30% (ApplyVrThumbstickDeadzone). The clutch starts its output
+// there, so movement starts just past its own small deadzone and rises evenly to full tilt.
+constexpr float kLayerStickDeadzone = 0.30f;
 constexpr double kClutchTapSeconds = 0.3, kClutchTapPressSeconds = 0.12;
 constexpr float kClick = 0.75f;
 
@@ -323,6 +328,23 @@ void SampleHands()
             logged[hand] = true;
             NSLog(@"[SharVisionOS] %s hand tracked (bare hands play as a Touch controller)", hand == kLeft ? "left" : "right");
         }
+    // How often each hand's pose rests on joints ARKit only estimated, every 900 samples (about 10 s).
+    static unsigned samples = 0, tracked[2] = {0, 0}, estimated[2] = {0, 0};
+    for (int hand = kLeft; hand <= kRight; ++hand)
+    {
+        if (!gHands[hand].tracked) continue;
+        ++tracked[hand];
+        if (!gHands[hand].wristTracked || !gHands[hand].knucklesTracked || !gHands[hand].middleTipTracked) ++estimated[hand];
+    }
+    if (++samples >= 900)
+    {
+        if (tracked[kLeft] || tracked[kRight])
+            NSLog(@"[SharVisionOS] bare hands: left tracked %u%% (%u%% of those from estimated joints), right %u%% (%u%%)",
+                  tracked[kLeft] * 100 / samples, tracked[kLeft] ? estimated[kLeft] * 100 / tracked[kLeft] : 0,
+                  tracked[kRight] * 100 / samples, tracked[kRight] ? estimated[kRight] * 100 / tracked[kRight] : 0);
+        samples = 0;
+        tracked[kLeft] = tracked[kRight] = estimated[kLeft] = estimated[kRight] = 0;
+    }
 }
 
 struct Gestures
@@ -338,8 +360,9 @@ Gestures GesturesOf(const Hand& hand)
     g.middle = Pinch(hand.thumbTip, hand.middleTip);
     g.ring = Pinch(hand.thumbTip, hand.ringTip);
     g.little = Pinch(hand.thumbTip, hand.littleTip);
-    if (hand.middleTipTracked && hand.wristTracked)
-        g.fist = Clamp01((kCurlOpen - simd_distance(hand.middleTip, hand.wrist)) / (kCurlOpen - kCurlClosed));
+    // From ARKit's estimate even where it can't see the joint: in a fist the middle fingertip is
+    // tucked out of sight, so requiring it seen meant a fist almost never counted.
+    g.fist = Clamp01((kCurlOpen - simd_distance(hand.middleTip, hand.wrist)) / (kCurlOpen - kCurlClosed));
     // One pinch at a time: the strongest finger's. And a pinch isn't a fist.
     const float best = std::max({g.index, g.middle, g.ring, g.little});
     if (best > 0)
@@ -411,30 +434,36 @@ void UpdateClutch(int hand)
     clutch.maxTravel = std::max(clutch.maxTravel, travel);
     clutch.stick = travel < kClutchDeadzone
         ? simd_make_float2(0, 0)
-        : planar / travel * Clamp01((travel - kClutchDeadzone) / (kClutchRange - kClutchDeadzone));
+        : planar / travel * (kLayerStickDeadzone + (1 - kLayerStickDeadzone) *
+                             Clamp01((travel - kClutchDeadzone) / (kClutchRange - kClutchDeadzone)));
 }
 
-// A hand's grip pose, as OpenXR defines it (the Touch grips the VR layer was tuned with): -Z where
-// the index finger points (along its metacarpal), +X the palm's normal, into the palm of the
-// right hand and away from the palm of the left (so to the right, both hands held upright), +Y
-// towards the thumb; at the palm, between the wrist and the middle knuckle. From joint positions
-// alone, so ARKit's own anchor axes never matter.
+// A hand's grip pose, in the frame of a Touch controller's grip, which the VR layer's hand meshes
+// (vr_hand_mesh.h: fingers towards -Y, the wrist towards +Y), its wrist HUD and its body IK are
+// made for: +Y towards the wrist (along the middle metacarpal), +X the palm's normal, into the palm
+// of the right hand and away from the palm of the left, so -Z (= Y x X) comes out of the thumb's
+// side, as through a fist round a controller; at the palm, between the wrist and the middle
+// knuckle. With -Z along the fingers instead, the hands were drawn turned 90 degrees in the plane
+// of the palm. From joint positions alone, so ARKit's own anchor axes never matter.
 bool HandGrip(const Hand& hand, int index, simd_float4x4* originFromGrip)
 {
-    if (!hand.tracked || !hand.wristTracked || !hand.knucklesTracked) return false;
-    simd_float3 forward = hand.indexKnuckle - hand.wrist;
+    // ARKit places every joint of a tracked hand, estimating the ones it can't see. Only the ones
+    // it could see once counted, and from a palm turned down or away the wrist and knuckles often
+    // aren't: the game's hands showed only with the palms turned up towards the face.
+    if (!hand.tracked) return false;
+    simd_float3 forward = hand.middleKnuckle - hand.wrist;
     if (simd_length(forward) < 1e-4f) return false;
     forward = simd_normalize(forward);
     simd_float3 right = index == kRight ? hand.middleKnuckle - hand.indexKnuckle : hand.indexKnuckle - hand.middleKnuckle;
     if (simd_length(right) < 1e-4f) return false;
     right = simd_normalize(right);
-    // A palm-down frame first (+Y out of the back of the hand), then rolled to OpenXR's grip.
+    // Out of the back of the hand, then the grip's axes.
     simd_float3 back = simd_cross(right, forward);
     if (simd_length(back) < 1e-4f) return false;
     back = simd_normalize(back);
-    const simd_float3 z = -forward;
     const simd_float3 x = index == kRight ? back : -back;
-    const simd_float3 y = simd_normalize(simd_cross(z, x));
+    const simd_float3 y = -forward;
+    const simd_float3 z = simd_normalize(simd_cross(x, y));
     *originFromGrip = simd_matrix(simd_make_float4(x, 0), simd_make_float4(y, 0), simd_make_float4(z, 0),
                                   simd_make_float4((hand.wrist + hand.middleKnuckle) * 0.5f, 1));
     return true;

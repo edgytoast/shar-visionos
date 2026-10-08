@@ -128,9 +128,9 @@ Before you press **Play**, the launcher asks:
 - **View**: Full, Progressive or Window. You can change it later in the game's VR menu, mid-game.
 - **Show my room around menus** (Full only, on by default): menus and loading screens float in
   your room rather than in the dark. Gameplay is fully immersive either way.
-- **Pace frames on the GPU (experimental)**: has the headset wait for each frame on the GPU instead
-  of the CPU. It can help the frame rate. If Full or Progressive ever shows nothing, quit SHAR VR
-  and open it again, and turn this off before you press **Play**.
+- **Pace frames on the GPU (experimental)**, under **Advanced**: has the headset wait for each
+  frame on the GPU instead of the CPU. It can help the frame rate. If Full or Progressive ever shows
+  nothing, quit SHAR VR and open it again, and turn this off before you press **Play**.
 
 **Sense controllers and gamepads** use the VR mod's layout in Full and Progressive, and the game's
 tutorials name the buttons on whatever you're holding. Swing a tracked hand to attack. The **Window**
@@ -138,19 +138,37 @@ view plays like the original game, so it takes the original layout: A jumps, B s
 Y talks and gets in and out of cars, and when you're driving, the right trigger is gas and the left
 one brakes.
 
-**Bare hands** play in Full and Progressive when no controller is connected:
+**Bare hands** play in Full and Progressive when no controller is connected. The launcher's
+**Controls** tab shows every control on the headset, for hands, controllers and the Window view.
 
-| Gesture | Is | On foot | Driving |
-|---|---|---|---|
-| Left thumb + middle, held and moved | left stick | walk (sprint at full tilt) | steer |
-| Left thumb + middle, quick tap | X | | |
-| Right thumb + little, held and moved sideways | right stick | turn | |
-| Index pinch (either hand) | trigger | | gas (right), brake (left) |
-| Right thumb + middle | A | act | gas |
-| Right thumb + ring | B | jump | handbrake |
-| Left thumb + ring | Y | act | |
-| Left thumb + little | menu | pause | pause |
-| Fist | grip | | handbrake (right) |
+The launcher has four tabs. **Play** covers the above. **Controls** shows a drawing of whatever
+you're holding (Sense controllers, a DualSense-style or Xbox-style pad, or your hands), labelling
+every button that does something, on foot and driving. **Ports** lists other games ported to Vision
+Pro from the [AVP Ports Index](https://github.com/edgytoast/avp-ports-index), with screenshots where
+the index has them. **About** has the credits, licences and a privacy note, a Diagnostics sheet with
+your build and system details for a bug report, and a button to check for updates.
+
+| On foot | | |
+|---|---|---|
+| <img src="docs/images/hands/hand-pinch-middle-left-move.svg" width="60" alt="Left thumb and middle finger pinched, moved in any direction"> | **Walk** | Pinch and hold your left thumb and middle finger, then move your hand like a joystick. All the way to run. |
+| <img src="docs/images/hands/hand-pinch-little-right-turn.svg" width="60" alt="Right thumb and little finger pinched, moved sideways"> | **Turn** | Pinch and hold your right thumb and little finger, then move your hand sideways. Or just turn your body. |
+| <img src="docs/images/hands/hand-pinch-middle-right.svg" width="60" alt="Right thumb and middle finger pinched"> | **Act** | Pinch your right thumb and middle finger: talk, go through doors, get into a car. |
+| <img src="docs/images/hands/hand-pinch-ring-right.svg" width="60" alt="Right thumb and ring finger pinched"> | **Jump** | Pinch your right thumb and ring finger. |
+| <img src="docs/images/hands/hand-swing-right.svg" width="60" alt="An open right hand, swinging"> | **Attack** | Swing your hand at it. |
+| <img src="docs/images/hands/hand-pinch-little-left.svg" width="60" alt="Left thumb and little finger pinched"> | **Pause** | Pinch your left thumb and little finger. |
+
+| Driving | | |
+|---|---|---|
+| <img src="docs/images/hands/hand-pinch-middle-left-steer.svg" width="60" alt="Left thumb and middle finger pinched, moved left and right"> | **Steer** | Pinch and hold your left thumb and middle finger, then move your hand left and right. |
+| <img src="docs/images/hands/hand-pinch-index-right.svg" width="60" alt="Right thumb and index finger pinched"> | **Gas** | Pinch and hold your right thumb and index finger. |
+| <img src="docs/images/hands/hand-pinch-index-left.svg" width="60" alt="Left thumb and index finger pinched"> | **Brake and reverse** | Pinch and hold your left thumb and index finger. |
+| <img src="docs/images/hands/hand-fist-right.svg" width="60" alt="A right fist"> | **Handbrake** | Make a fist with your right hand, or pinch your right thumb and ring finger. |
+| <img src="docs/images/hands/hand-pinch-middle-left.svg" width="60" alt="Left thumb and middle finger pinched"> | **Horn** | Tap your left thumb and middle finger together. |
+| <img src="docs/images/hands/hand-pinch-ring-left.svg" width="60" alt="Left thumb and ring finger pinched"> | **Get out** | Pinch your left thumb and ring finger, or your right thumb and middle finger. |
+
+Rather steer with the wheel? Set **Vehicle Control** to **VR Wheel** in the game's VR menu, then
+put your hands on the wheel's rim and turn it. Bare hands hold it without a fist, so the pinches for gas
+and brake still work; Sense controllers hold it with the grips.
 
 The **Window** view needs a controller: visionOS gives apps no hand tracking outside Full and
 Progressive. Look at the game window to give it your controller, since visionOS hands a controller to
@@ -170,7 +188,7 @@ head or your controller), and **Graphics › Anti-Aliasing** and **Render Scale*
 - **The app won't open after a week.** Apps signed with a free account expire after 7 days. Run it
   from Xcode again; your game files and saves stay put.
 - **Full or Progressive shows nothing.** Quit SHAR VR, open it again, and turn off "Pace frames on
-  the GPU" before you press **Play**.
+  the GPU" (under **Advanced**) before you press **Play**.
 - **The Window view ignores your controller.** Look at it. See above.
 - **Cleaning up.** The engine's build lives in `build/` here (or, if this folder's path has a space in
   it, in `~/Library/Developer/SHARVR`). Delete it to get the space back; `build.sh` makes a new one.

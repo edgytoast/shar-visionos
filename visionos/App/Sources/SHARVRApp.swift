@@ -2,6 +2,7 @@ import AVFAudio
 import CompositorServices
 import os
 import SwiftUI
+import TrevorbiltKit
 
 @main
 struct SHARVRApp: App {
@@ -17,6 +18,7 @@ struct SHARVRApp: App {
         } catch {
             print("[SHARVR] setIntendedSpatialExperience(.bypassed) failed: \(error)")
         }
+        Trevorbilt.registerFonts()
         GameAudio.observeInterruptions()
         MemoryWatch.start()
         GameData.excludeFromBackup()
@@ -27,9 +29,14 @@ struct SHARVRApp: App {
     }
 
     var body: some Scene {
-        WindowGroup(id: SHARVRApp.launcherID) {
+        // Only ever one launcher: it's opened with the same value each time, and visionOS brings
+        // the window already showing that value to the front instead of opening another.
+        WindowGroup(id: SHARVRApp.launcherID, for: String.self) { _ in
             LauncherView()
+        } defaultValue: {
+            SHARVRApp.launcherID
         }
+        .windowResizability(.contentSize)
 
         // One game window, never restored at launch: the launcher is the way in.
         Window("The Simpsons: Hit & Run", id: SHARVRApp.gameWindowID) {
@@ -106,7 +113,8 @@ enum GameScenes {
     static func windowClosed() {
         guard presentedMode == 2 else { return }
         presentedMode = nil
-        openWindow?(id: SHARVRApp.launcherID)
+        GameView.shared.windowCloses += 1
+        openWindow?(id: SHARVRApp.launcherID, value: SHARVRApp.launcherID)
     }
 }
 
@@ -116,6 +124,10 @@ enum GameScenes {
 final class GameView {
     static let shared = GameView()
     var style: any ImmersionStyle = GameView.style(for: GameView.savedMode())
+    /// The game's window is showing (the Window view): the launcher leaves the controller to it.
+    var windowShowing = false
+    /// Counts the game's window being closed with its own controls: the launcher comes back on Play.
+    var windowCloses = 0
 
     // Portrait, because the wide default portal cuts off what's below eye level (Homer's hands,
     // the wheel). With the system's own range: a custom one (0.1...1.0, opening at 0.4) showed
@@ -184,6 +196,33 @@ enum GameData {
               isDirectory.boolValue,
               let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { return false }
         return names.contains { $0.lowercased().hasSuffix(".rcf") }
+    }
+
+    // How much of the game is installed, for the launcher: "1.97 GB" and its file count. Only the
+    // items excludeFromBackup marks, so saves, an import's staging folder or AirDrop's Inbox don't
+    // count. Walks the folders, so off the main thread.
+    nonisolated static func installedSummary() -> (size: String, files: Int)? {
+        let folders: Set<String> = ["art", "movies", "scripts", "sound"]
+        guard let items = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        else { return nil }
+        let keys: [URLResourceKey] = [.fileSizeKey, .isRegularFileKey]
+        var bytes: Int64 = 0, files = 0
+        func count(_ url: URL) {
+            guard let values = try? url.resourceValues(forKeys: Set(keys)), values.isRegularFile == true else { return }
+            bytes += Int64(values.fileSize ?? 0)
+            files += 1
+        }
+        for item in items {
+            let name = item.lastPathComponent.lowercased()
+            if folders.contains(name) {
+                guard let walker = FileManager.default.enumerator(at: item, includingPropertiesForKeys: keys) else { continue }
+                for case let url as URL in walker { count(url) }
+            } else if name.hasSuffix(".rcf") {
+                count(item)
+            }
+        }
+        guard files > 0 else { return nil }
+        return (ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file), files)
     }
 
     // The game's own files, about 2 GB the player can always copy in again, stay out of iCloud

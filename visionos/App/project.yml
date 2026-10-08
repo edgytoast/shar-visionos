@@ -3,6 +3,12 @@ options:
   deploymentTarget:
     visionOS: "26.0"
 
+# The launcher every Trevorbilt port shares, vendored here so everything the app runs is in this
+# repository.
+packages:
+  TrevorbiltKit:
+    path: ../TrevorbiltKit
+
 targets:
   SHARVR:
     type: application
@@ -35,7 +41,41 @@ targets:
     configFiles:
       Debug: SHARVR.xcconfig
       Release: SHARVR.xcconfig
+    # Which commit the app was built from, for its About and Ports tabs: TBBuildCommit (the full
+    # commit, "unknown" without git) and TBBuildDirty, a development build: one with uncommitted
+    # changes, or from anything but a checkout of the public repository (whose name the release
+    # fills in), since only its commits can be compared with its releases.
+    postBuildScripts:
+      # TODO: remove once the AVP Ports Index's live feed carries media (schema 1.4.0). Until then a
+      # Debug build bundles the draft feed (DebugFixtures, which never goes into a release) so the
+      # Ports tab can show its pictures on a headset; Release builds never have it.
+      - name: Ports media fixture (Debug)
+        basedOnDependencyAnalysis: false
+        script: |
+          fixture="$SRCROOT/DebugFixtures/ports-media-fixture.json"
+          bundled="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/ports-media-fixture.json"
+          if [ "$CONFIGURATION" = "Debug" ] && [ -f "$fixture" ]; then cp "$fixture" "$bundled"; else rm -f "$bundled"; fi
+      - name: Build commit
+        basedOnDependencyAnalysis: false
+        # So it runs after Xcode writes the app's Info.plist, not before (which would lose its keys).
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
+        script: |
+          plist="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+          release_repo="$(printf '%s' 'edgytoast/shar-visionos' | tr '[:upper:]' '[:lower:]')"
+          commit=unknown
+          dirty=false
+          if commit_found=$(git -C "$SRCROOT" rev-parse HEAD 2>/dev/null); then
+            commit=$commit_found
+            git -C "$SRCROOT" diff --quiet HEAD -- 2>/dev/null || dirty=true
+            git -C "$SRCROOT" remote -v 2>/dev/null | tr '[:upper:]' '[:lower:]' |
+              grep -qF -e "/$release_repo.git " -e "/$release_repo " -e ":$release_repo.git " -e ":$release_repo " || dirty=true
+          fi
+          /usr/libexec/PlistBuddy -c "Delete :TBBuildCommit" "$plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Delete :TBBuildDirty" "$plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :TBBuildCommit string $commit" -c "Add :TBBuildDirty string $dirty" "$plist"
     dependencies:
+      - package: TrevorbiltKit
       - sdk: ARKit.framework
       - sdk: AVFoundation.framework
       - sdk: AudioToolbox.framework
@@ -84,6 +124,8 @@ targets:
         INFOPLIST_KEY_NSWorldSensingUsageDescription: "Tracks your head so the game can be shown in stereo from where you are."
         INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
         CODE_SIGN_STYLE: Automatic
+        # The build-commit phase reads the repository's git state.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
 
 schemes:
   SHARVR:

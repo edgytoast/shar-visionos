@@ -899,7 +899,7 @@ index 559cb113..a2c7a6f1 100644
          // We don't want the position to get too far away from the character, so clamp
          // the distance to some arbitrary maximum
 diff --git a/code/vr/openxr_desktop_runtime.cpp b/code/vr/openxr_desktop_runtime.cpp
-index a8b48558..e955450a 100644
+index a8b48558..f18ab111 100644
 --- a/code/vr/openxr_desktop_runtime.cpp
 +++ b/code/vr/openxr_desktop_runtime.cpp
 @@ -36,6 +36,11 @@
@@ -964,7 +964,7 @@ index a8b48558..e955450a 100644
  void SetEnhancedMaterialsEnabled(bool enabled) { SetSharedEnhancedMaterialsEnabled(enabled); }
  bool IsEnhancedMaterialsEnabled() { return GetSharedVrState().enhancedMaterialsEnabled; }
  void SetCustomMaterialsEnabled(bool enabled) { SetSharedCustomMaterialsEnabled(enabled); }
-@@ -599,10 +633,22 @@ bool IsVehicleGripToggleEnabled() { return GetSharedVrState().vehicleGripToggleE
+@@ -599,10 +633,28 @@ bool IsVehicleGripToggleEnabled() { return GetSharedVrState().vehicleGripToggleE
  bool IsHorizontalMenuInputDominant() { return Desktop::menuHorizontalInputDominant; }
  bool IsVerticalMenuInputDominant() { return Desktop::menuVerticalInputDominant; }
  void SetVrBaseHeading(const rmt::Vector& heading) { SharedVrState& s=GetSharedVrState();s.vrBaseHeading=heading;s.vrBaseHeading.y=0.0f;s.vrBaseHeadingValid=s.vrBaseHeading.NormalizeSafe()>0.0001f; }
@@ -975,7 +975,13 @@ index a8b48558..e955450a 100644
  bool GetPhysicalHeadHeight(float* height) { Character* p=GetCharacterManager()?GetCharacterManager()->GetCharacter(0):NULL;const bool child=p&&(p->GetUID()==tEntity::MakeUID("bart")||p->GetUID()==tEntity::MakeUID("lisa"));return GetSharedPhysicalHeadHeight(Desktop::origin,Desktop::originValid,Desktop::usingStageSpace,GetSharedVrState().seatedMode,child,height); }
  bool RecenterVrPose() { if(!RecenterSharedTracking(Desktop::currentViews,Desktop::currentViewFlags,&Desktop::origin))return false;Desktop::originValid=true;GetSharedVrMenu().InvalidateAnchor();return true; }
  bool GetHeadForward(rmt::Vector* forward) { return GetSharedHeadForward(Desktop::currentViews,Desktop::origin,Desktop::originValid,forward); }
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++// Bare hands' grip pose points its -Z out of the thumb's side, not where the hand points: Move
++// Direction's "Controller" follows the head for them.
++bool GetControllerForward(unsigned hand,rmt::Vector* forward) { return hand<2&&!GetSharedVrState().bareHandsInput&&GetSharedControllerForward(Desktop::origin,Desktop::originValid,Desktop::handPoses[hand],Desktop::handPoseValid[hand],forward); }
++#else
 +bool GetControllerForward(unsigned hand,rmt::Vector* forward) { return hand<2&&GetSharedControllerForward(Desktop::origin,Desktop::originValid,Desktop::handPoses[hand],Desktop::handPoseValid[hand],forward); }
++#endif
 +void SetMoveDirection(int direction) { SetSharedMoveDirection(direction); }
 +int GetMoveDirection() { return GetSharedVrState().moveDirection; }
 +#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
@@ -1060,6 +1066,37 @@ index 3fdb8b1b..6f9b1b18 100644
          return;
      }
      DrawRadarPlane();
+diff --git a/code/vr/openxr_shared_input.cpp b/code/vr/openxr_shared_input.cpp
+index a9b8fb92..a3fccc0b 100644
+--- a/code/vr/openxr_shared_input.cpp
++++ b/code/vr/openxr_shared_input.cpp
+@@ -289,7 +289,13 @@ void EmitQuestControllerBindings(const VrInputFrame& input,
+     set("LeftStickX",input.move.x);set("LeftStickY",input.move.y);
+     set("RightStickX",input.look.x);set("RightStickY",input.look.y);
+     set("A",input.select);set("B",input.back);set("X",input.attack);
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    // A is the VR layout's act (Y) too. Not in Original mode (the visionOS window), where A is the
++    // car's gas: echoed as Y, pressing it to drive got the player out of the car.
++    set("Y",(input.use>0.0f||(input.select>0.0f&&GetSharedVrState().vrModeEnabled))?1.0f:0.0f);
++#else
+     set("Y",(input.select>0.0f||input.use>0.0f)?1.0f:0.0f);
++#endif
+     set("Start",input.menu);
+     set("LeftTrigger",effectiveLeftTrigger);
+     set("RightTrigger",effectiveRightTrigger);
+@@ -387,7 +393,12 @@ void SubmitVrInputFrame(const VrInputFrame& raw,VrInputBindingSink sink,void* co
+     VrInputFrame gameplayInput=input;
+     // Original mode follows the gamepad layout: right grip is the on-foot
+     // attack button. In VR mode the grip remains reserved for grabbing.
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    // On foot only: in a car the right grip is the handbrake, and attack is the car's X, the horn.
++    if(!state.vrModeEnabled&&!vehicle)
++#else
+     if(!state.vrModeEnabled)
++#endif
+         gameplayInput.attack=std::max(gameplayInput.attack,input.rightGrip);
+     const bool physicalPush=PhysicalInteract.pulseFrames>0;
+     if(physicalPush)
 diff --git a/code/vr/openxr_shared_menu.cpp b/code/vr/openxr_shared_menu.cpp
 index ce62ae75..147122fb 100644
 --- a/code/vr/openxr_shared_menu.cpp
@@ -1158,7 +1195,7 @@ index 9bc6acd7..b72d9a86 100644
  void SetSharedSmoothTurnSpeed(float value);
  void SetSharedSnapTurnAngle(float value);
 diff --git a/code/vr/openxr_shared_state.cpp b/code/vr/openxr_shared_state.cpp
-index 4bc36b40..bde67677 100644
+index 4bc36b40..8620763e 100644
 --- a/code/vr/openxr_shared_state.cpp
 +++ b/code/vr/openxr_shared_state.cpp
 @@ -23,7 +23,15 @@ SharedVrState::SharedVrState()
@@ -1174,15 +1211,15 @@ index 4bc36b40..bde67677 100644
 +#else
 +      antiAliasing(0),
 +#endif
-+      viewMode(0),flatWindowActive(false),flatWindowTangent(0.4087f)
++      viewMode(0),flatWindowActive(false),flatWindowTangent(0.4087f),bareHandsInput(false)
  {
      vehicleBodyAnchorWorld.Identity();
      vehicleBodyCameraWorld.Identity();
 diff --git a/code/vr/openxr_shared_state.h b/code/vr/openxr_shared_state.h
-index 97496cb9..11a770a4 100644
+index 97496cb9..a7f5f5c4 100644
 --- a/code/vr/openxr_shared_state.h
 +++ b/code/vr/openxr_shared_state.h
-@@ -63,6 +63,18 @@ struct SharedVrState
+@@ -63,6 +63,22 @@ struct SharedVrState
      bool vehicleBodyAnchorValid;
      rmt::Matrix vehicleBodyAnchorWorld;
      rmt::Matrix vehicleBodyCameraWorld;
@@ -1198,6 +1235,10 @@ index 97496cb9..11a770a4 100644
 +    // The window's half-height as a view tangent. Its picture is rendered wider than the window
 +    // (the eye frustum's own angles), so layout that fills the window uses this.
 +    float flatWindowTangent;
++    // visionOS, set by its backend each frame: the player's bare hands are the controllers (hand
++    // tracking, no Sense controllers or gamepad), so the VR wheel is held by touching its rim
++    // rather than by a grip a pinch would let go of.
++    bool bareHandsInput;
  
      SharedVrState();
  };
@@ -1233,6 +1274,94 @@ index d0c3aa5b..7e5acc7f 100644
  }
  #endif
  #endif
+diff --git a/code/vr/openxr_shared_vehicle.cpp b/code/vr/openxr_shared_vehicle.cpp
+index 117a1a9a..14980386 100644
+--- a/code/vr/openxr_shared_vehicle.cpp
++++ b/code/vr/openxr_shared_vehicle.cpp
+@@ -303,7 +303,12 @@ void GetVrVehicleInputOverrides(bool yoke,float rawLeftTrigger,
+ {
+     SharedVrState& s=GetSharedVrState();const bool wheel=s.vrModeEnabled&&s.vehicleControlMode==1;
+     *leftTrigger=rawLeftTrigger;*rightTrigger=rawRightTrigger;
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++    // Bare hands keep their pinches for gas and brake; the yoke only steers.
++    if(wheel&&yoke&&!s.bareHandsInput&&(s.wheelGrabbed[0]||s.wheelGrabbed[1]))
++#else
+     if(wheel&&yoke&&(s.wheelGrabbed[0]||s.wheelGrabbed[1]))
++#endif
+     {*rightTrigger=std::max(0.0f,s.yokeThrottle);*leftTrigger=std::max(0.0f,-s.yokeThrottle);}
+     *leftGripButton=wheel?false:leftGrip>GRAB;*rightGripButton=wheel?false:rightGrip>GRAB;
+     *leftThumbButton=leftStickClick||(wheel&&s.wheelHonk);
+@@ -385,7 +390,11 @@ void UpdateVrVehicleState(const VrVehicleInput& in,VrVehicleHapticSink haptic,
+         float handY[2]={0,0},handZ[2]={0,0};bool held[2]={false,false};
+         for(unsigned hand=0;hand<2;++hand)
+         {
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++            if(s.vehicleGripToggleEnabled&&!s.bareHandsInput&&gripRising[hand]&&s.wheelGrabbed[hand])
++#else
+             if(s.vehicleGripToggleEnabled&&gripRising[hand]&&s.wheelGrabbed[hand])
++#endif
+                 s.wheelGrabbed[hand]=false;
+             if(!in.handValid[hand])
+             {
+@@ -395,6 +404,21 @@ void UpdateVrVehicleState(const VrVehicleInput& in,VrVehicleHapticSink haptic,
+             const rmt::Vector p=in.handPose[hand].Row(3);const rmt::Vector d=p-centre;
+             const bool close=std::sqrt(d.x*d.x+d.y*d.y)<s.activeWheelRadius+0.24f&&
+                              std::fabs(d.z)<0.28f&&std::fabs(d.y)<0.28f;
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++            if(s.bareHandsInput)
++            {
++                // Bare hands: held while at a handle, let go a little further out (a pinch would
++                // let go of a fist's grip). The handles are 16 cm either side of the centre.
++                const float handle=std::fabs(std::fabs(d.x)-0.16f);
++                if(!s.wheelGrabbed[hand]&&handle<0.08f&&std::fabs(d.y)<0.10f&&std::fabs(d.z)<0.10f)
++                {s.wheelGrabbed[hand]=true;
++                    s.wheelGrabOffset[hand]=p.y;s.wheelGrabOrientRot[hand]=in.handPose[hand];
++                    s.wheelGrabOrientRot[hand].Row(3).Set(0,0,0);}
++                else if(s.wheelGrabbed[hand]&&!(handle<0.14f&&std::fabs(d.y)<0.18f&&std::fabs(d.z)<0.18f))
++                    s.wheelGrabbed[hand]=false;
++            }
++            else
++#endif
+             if(s.vehicleGripToggleEnabled)
+             {
+                 if(gripRising[hand]&&!s.wheelGrabbed[hand]&&close){s.wheelGrabbed[hand]=true;
+@@ -419,7 +443,12 @@ void UpdateVrVehicleState(const VrVehicleInput& in,VrVehicleHapticSink haptic,
+                 ((held[0]?-handY[0]:0.0f)-(held[1]?-handY[1]:0.0f))/0.11f));
+             s.wheelAngle+=(steering*MAX_ANGLE-s.wheelAngle)*0.80f;
+             float z=0;int count=0;for(unsigned h=0;h<2;++h)if(held[h]){z+=handZ[h];++count;}
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++            // Bare hands drive with their pinches: the yoke isn't drawn pushed for gas it isn't giving.
++            const float throttle=s.bareHandsInput?0.0f:std::max(-1.0f,std::min(1.0f,(z/count)/0.035f));
++#else
+             const float throttle=std::max(-1.0f,std::min(1.0f,(z/count)/0.035f));
++#endif
+             s.yokeThrottle+=(throttle-s.yokeThrottle)*0.75f;
+             if(s.yokeThrottle>=0.95f&&!s.yokeFullGasLatched&&haptic)
+                 for(unsigned h=0;h<2;++h)if(held[h])haptic(context,h,0.85f,70);
+@@ -440,8 +469,23 @@ void UpdateVrVehicleState(const VrVehicleInput& in,VrVehicleHapticSink haptic,
+             const rmt::Vector p=in.handPose[hand].Row(3);float x,y,z;ToWheelLocal(s,p,x,y,z);
+             const float radial=std::sqrt(x*x+y*y),angle=std::atan2(x,y);
+             if(!s.wheelGrabbed[hand]&&radial<0.10f&&std::fabs(z)<0.16f)s.wheelHonk=true;
++#if defined(SRR2_OPENXR_PLATFORM_VISIONOS)
++            // Bare hands hold the wheel by touching its rim, and let go a little further out: a
++            // fist was the grip, and the pinches for gas and brake let go of it.
++            // A new hold needs the hand on the rim, and not on its lower third, where a hand resting
++            // on a thigh would be. Out of the hub's horn zone either way.
++            const bool squeezed=s.bareHandsInput
++                ?(s.wheelGrabbed[hand]
++                  ?std::fabs(radial-s.activeWheelRadius)<0.17f&&std::fabs(z)<0.22f&&radial>0.10f&&
++                   std::fabs(angle)<2.2f
++                  :std::fabs(radial-s.activeWheelRadius)<0.06f&&std::fabs(z)<0.08f&&radial>0.10f&&
++                   std::fabs(angle)<2.1f)
++                :in.grip[hand]>(s.wheelGrabbed[hand]?RELEASE:GRAB);
++            if(s.vehicleGripToggleEnabled&&!s.bareHandsInput)
++#else
+             const bool squeezed=in.grip[hand]>(s.wheelGrabbed[hand]?RELEASE:GRAB);
+             if(s.vehicleGripToggleEnabled)
++#endif
+             {
+                 if(gripRising[hand]&&s.wheelGrabbed[hand])
+                     s.wheelGrabbed[hand]=false;
 diff --git a/code/vr/openxrmanager.cpp b/code/vr/openxrmanager.cpp
 index cc8a587c..fc142e4d 100644
 --- a/code/vr/openxrmanager.cpp

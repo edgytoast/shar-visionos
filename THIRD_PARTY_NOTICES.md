@@ -8,6 +8,7 @@ comes from, and the license it keeps.
 | Component | What it does here | License |
 |---|---|---|
 | [SMAA](https://github.com/iryoku/smaa) by Jorge Jimenez, Jose I. Echevarria, Belen Masia, Fernando Navarro and Diego Gutierrez | The SMAA anti-aliasing option. Its lookup tables and its shader, translated to Metal by `scripts/generate-smaa-msl.py`, are in `visionos/engine/code/vr/visionos/smaa/`. | MIT ([`smaa/LICENSE.txt`](visionos/engine/code/vr/visionos/smaa/LICENSE.txt)) |
+| [Space Mono](https://github.com/googlefonts/spacemono) and [Roboto](https://github.com/googlefonts/roboto-classic) | The launcher's fonts, bundled in `visionos/TrevorbiltKit/Sources/TrevorbiltKit/Resources/Fonts/`. | SIL Open Font License 1.1 ([`OFL-SpaceMono.txt`](visionos/TrevorbiltKit/Sources/TrevorbiltKit/Resources/Fonts/OFL-SpaceMono.txt), [`OFL-Roboto.txt`](visionos/TrevorbiltKit/Sources/TrevorbiltKit/Resources/Fonts/OFL-Roboto.txt)) |
 
 ## Downloaded by the build
 

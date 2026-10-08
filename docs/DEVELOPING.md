@@ -18,8 +18,10 @@ scripts/build-engine-visionos.sh  the engine, as one static archive for the app 
 scripts/gen-mirror-materials.py   writes the Window view's materials (WindowFrame.usda)
 scripts/generate-smaa-msl.py      translates SMAA's reference shader to Metal
 scripts/make-app-icon.py          draws the app icon's three layers
+scripts/make-hand-art.py          draws the bare-hand control diagrams (the Controls guide, the README, TrevorbiltKit's tintable hands)
 visionos/App/                     the SwiftUI app (an xcodegen project.yml; the .xcodeproj is generated)
 visionos/engine/code/vr/visionos/ the visionOS runtime, linked into the upstream clone as code/vr/visionos
+visionos/TrevorbiltKit/            the launcher every Trevorbilt port shares (brand, mode cards, inputs, controller callouts, Ports, About), a local Swift package
 ```
 
 The upstream engine never lives in this repository. `build.sh` clones it into `build/upstream`
@@ -97,7 +99,14 @@ them; `SHAR_PRESENT_EVENT`, the launcher's toggle, is the one that works everywh
 | `SHAR_TEST_EVENTS="break:19@55 coins:5@58"` | Plays a breakable by the player (IDs in upstream's `code/constants/breakablesenum.h`: 19 is Krusty glass, 24 a car explosion) or drops coins, that many seconds in. Also `scale:50@40` (Render Scale), `aa:1@40` (Anti-Aliasing), `view:2@40` (View) and `turn:90@40` (turns the view right, as a Digital Crown recentre would). Times count from the game's first frame. |
 | `SHAR_PRESENT_EVENT=1` | The launcher's "Pace frames on the GPU". |
 | `SHAR_TEST_WINDOW_TILT=25` | Turns the Window view's content 25 degrees, to see its depth from the side without moving the Simulator's camera. |
-| `SHAR_TEST_NO_INPUT=1` | Shows the launcher as if no controller were connected and hand tracking were denied (the Simulator always has a gamepad), to check what it says then. |
+| `SHAR_TEST_CONTROLS=sense,driving` | Shows that page of the Controls guide: `hands`, `sense` or `gamepad`, plus `window` for the Window view's buttons and `driving` for the driving controls, on the launcher's Controls tab. |
+| `SHAR_TEST_FEED=<path on the Mac>` | The Ports tab reads the AVP Ports Index's list from that file instead of the network (a draft feed with pictures, say, or one with a wrong SHA-256). |
+| `SHAR_TEST_OFFLINE=1` | Every Ports picture download fails as it would offline (clear the app's Caches first to see the cards without pictures). |
+| `SHAR_TEST_HANDS=kit` | The Controls guide's Hands page draws TrevorbiltKit's hands, as any other port shows them: each hand a skin tone from Crayola's Colors of the World set, picked at random each time the page appears, instead of SHAR's yellow ones. |
+| `SHAR_TEST_PAD=none` | The Controls guide draws as if no gamepad (`none`: the DualSense kind) or an Xbox-kind pad (`xbox`) were connected, with the neutral symbols. The Simulator always has its own pad. |
+| `SHAR_TEST_SHEET=manage` | Opens that sheet: `manage` or `advanced` (Play), `credits` or `diagnostics` (About), `port:<index id>` (Ports). Use with `SHAR_TEST_TAB`. |
+| `SHAR_TEST_TAB=play` | Opens the launcher on that tab (`play`, `controls`, `ports` or `about`). |
+| `SHAR_TEST_INPUTS=hands:denied,sense:none,gamepad:none` | Shows the launcher's inputs as given instead of what's there (hands: `allowed`, `denied`, `notasked` or `unavailable`; sense: `none`, `L`, `R` or `LR`; gamepad: `none` or `yes`), to check what it says for each. The Controls guide still reads the real controllers. |
 | `SHAR_TEST_WINDOW_HIDE=40~10` | Puts the Window view in the background 40 seconds after it opens, for 10 seconds, as leaving it would: the game holds (no frames, sound paused) and comes back on its pause menu. |
 | `SHAR_TEST_WINDOW_RELIEF=1` | Shows the Window view's older depth-relief picture instead of the scene mirror (`SHAR_TEST_WINDOW_LAYERS=pb` picks its layers). |
 

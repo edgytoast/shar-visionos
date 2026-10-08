@@ -58,12 +58,14 @@ struct GameWindowView: View {
             GameScenes.capture(openImmersiveSpace: openImmersiveSpace, dismissImmersiveSpace: dismissImmersiveSpace,
                                openWindow: openWindow, dismissWindow: dismissWindow)
             SharVisionOS_SetWindowActive(true)
+            GameView.shared.windowShowing = true
             if !SharVisionOS_IsEngineRunning() {
                 SharVisionOS_Launch(nil, GameData.directory.path)
             }
         }
         .onDisappear {
             SharVisionOS_SetWindowActive(false)
+            GameView.shared.windowShowing = false
             GameScenes.windowClosed()
         }
         .onChange(of: scenePhase) { _, phase in
@@ -72,6 +74,7 @@ struct GameWindowView: View {
             // whether visionOS also reports .inactive during play (a glance at Control Center or a
             // notification) is unchecked on the headset, and holding then would pause the game.
             SharVisionOS_SetWindowVisible(phase != .background)
+            print("[SHARVR] window phase: \(phase)")
         }
         .task {
             // Headless Simulator runs: SHAR_TEST_WINDOW_HIDE="40~10" puts the window in the
@@ -224,7 +227,7 @@ final class GameScreen {
     // The engine's frames change size with Render Scale.
     private func makeTextures(eye: SIMD2<Int>, hud size: SIMD2<Int>) {
         guard let colour = Self.texture(width: eye.x * 2, height: eye.y),
-              let hudTexture = Self.texture(width: size.x, height: size.y),
+              let hudTexture = Self.texture(width: size.x, height: size.y, mipmapped: true),
               let colourResource = try? TextureResource(from: colour),
               let hudResource = try? TextureResource(from: hudTexture) else {
             print("[SHARVR] the game window's \(eye.x)x\(eye.y) textures failed")
@@ -245,9 +248,12 @@ final class GameScreen {
         hudSize = size
     }
 
-    private static func texture(width: Int, height: Int) -> LowLevelTexture? {
+    // The HUD is mipmapped (the engine regenerates its levels with each copy): seen smaller than it's
+    // drawn, a single level sparkled.
+    private static func texture(width: Int, height: Int, mipmapped: Bool = false) -> LowLevelTexture? {
+        let levels = mipmapped ? Int(log2(Double(max(width, height)))) + 1 : 1
         let descriptor = LowLevelTexture.Descriptor(pixelFormat: .bgra8Unorm_srgb, width: width, height: height,
-                                                    textureUsage: [.shaderRead, .renderTarget])
+                                                    mipmapLevelCount: levels, textureUsage: [.shaderRead, .renderTarget])
         return try? LowLevelTexture(descriptor: descriptor)
     }
 
