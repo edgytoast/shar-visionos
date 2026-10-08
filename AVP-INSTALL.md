@@ -95,8 +95,11 @@ compiler cache, if you've installed ccache) it writes only inside this folder, o
      VR's own folder in Files (On My Apple Vision Pro › SHAR VR).
 5. **Play.** Pick a view (Full, Progressive or Window) and tap **Play**.
 
-To update later: pull the new code (`git pull`), run `./scripts/build.sh` again, and run the app from
-Xcode. Your game files and saves stay on the headset.
+To update later, get the new code: if you came from the AVP Ports Index, run `git fetch`, then
+`git checkout` the commit SHAR VR's [page there](https://github.com/edgytoast/avp-ports-index/blob/main/ports/shar-visionos.md)
+lists now (that's the code it scanned; `git pull` doesn't work on it). If you cloned `main`,
+`git pull`. Then run `./scripts/build.sh` again, and run the app from Xcode. Your game files and
+saves stay on the headset.
 
 ## Controls and known issues
 
@@ -118,7 +121,9 @@ Known issues:
 - The Window view recreates the game's scene in visionOS's own renderer, so it has no sun shadows
   and no distant haze, and blob shadows sit just off the ground.
 - "Pace frames on the GPU", under the launcher's Advanced, is experimental. If Full or Progressive ever shows
-  nothing, quit the app, open it again, and turn it off before pressing Play.
+  nothing, force quit the app (hold the top button and the Digital Crown until Force Quit
+  Applications shows, then let go, choose SHAR VR and tap Force Quit), open it again, and turn it
+  off before pressing Play.
 - Apps signed with a free Apple Account stop opening after 7 days. Run it from Xcode again; your
   game files and saves stay.
 

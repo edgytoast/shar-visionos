@@ -57,7 +57,9 @@ final class MirrorScene {
     // was behind.
     @MainActor private final class DynamicLayer {
         let entity = ModelEntity()
-        var mesh: (mesh: LowLevelMesh, resource: MeshResource)?
+        var mesh: LowLevelMesh?
+        /// Whether the entity draws `mesh`: a new one goes to RealityKit only once it has parts.
+        var shown = false
     }
     private let solidDynamic = DynamicLayer(), blendedDynamic = DynamicLayer()
     // The materials both meshes' parts index.
@@ -147,7 +149,7 @@ final class MirrorScene {
             timing.seconds += CACurrentMediaTime() - start
             if start - timing.since > 5 {
                 let calls = Double(timing.calls)
-                print(String(format: "[SHARVR] mirror: %.0f updates/s, %.0f frames/s, %.2f ms an update (acquire %.2f, "
+                NSLog("%@", String(format: "[SHARVR] mirror: %.0f updates/s, %.0f frames/s, %.2f ms an update (acquire %.2f, "
                              + "new meshes and textures %.2f, placing %.2f, dynamic %.2f), %d entities, %d materials, dynamic "
                              + "materials set %d times; textures %d made, "
                              + "%d failed, %d waiting; meshes %d made, %d failed, %d waiting; draws waiting for a mesh %d, "
@@ -189,17 +191,20 @@ final class MirrorScene {
                                              indices: Data(bytes: mesh.indices, count: Int(mesh.indexCount) * 2),
                                              bounds: BoundingBox(min: mesh.boundsMin, max: mesh.boundsMax)))
         }
-        // After the new ones: a mesh or texture can arrive and be gone in the same frame.
-        for index in 0..<Int(next.removedCount) {
-            let id = next.removed![index]
-            meshes[id] = nil
-            textures[id] = nil
-            failedTextures.remove(id)
-            pendingTextures.removeAll { $0.id == id }
-            pendingMeshes.removeAll { $0.id == id }
-            pools[id]?.forEach { $0.entity.removeFromParent() }
-            pools[id] = nil
-            materials = materials.filter { $0.key.texture != id }
+        // After the new ones: a mesh or texture can arrive and be gone in the same frame. A level's
+        // unload removes thousands at once, so the lists are filtered once, not once an id.
+        if next.removedCount > 0, let ids = next.removed {
+            let removed = Set(UnsafeBufferPointer(start: ids, count: Int(next.removedCount)))
+            for id in removed {
+                meshes[id] = nil
+                textures[id] = nil
+                pools[id]?.forEach { $0.entity.removeFromParent() }
+                pools[id] = nil
+            }
+            failedTextures.subtract(removed)
+            pendingTextures.removeAll { removed.contains($0.id) }
+            pendingMeshes.removeAll { removed.contains($0.id) }
+            materials = materials.filter { !removed.contains($0.key.texture) }
         }
         // A few milliseconds of them an update, and at least one of each.
         if !wantedTextures.isEmpty {
@@ -405,19 +410,24 @@ final class MirrorScene {
             layer.entity.isEnabled = false
             return
         }
-        let fits = layer.mesh.map { $0.mesh.vertexCapacity >= vertexCount && $0.mesh.indexCapacity >= indexCount } ?? false
+        let name = layer === solidDynamic ? "solid" : "blended"
+        let fits = layer.mesh.map { $0.vertexCapacity >= vertexCount && $0.indexCapacity >= indexCount } ?? false
         if !fits {
-            guard let mesh = try? LowLevelMesh(descriptor: Self.dynamicDescriptor(
-                      vertices: max(4096, vertexCount.nextPowerOfTwo), indices: max(8192, indexCount.nextPowerOfTwo))),
-                  let resource = try? MeshResource(from: mesh) else { return }
-            layer.mesh = (mesh, resource)
-            if layer.entity.model == nil {
-                layer.entity.model = ModelComponent(mesh: resource, materials: dynamicMaterialList)
-            } else {
-                layer.entity.model?.mesh = resource
+            // Big enough for what it had as well as for this frame, so growing one never shrinks the
+            // other (and the next frame doesn't make another).
+            let vertices = max(4096, vertexCount.nextPowerOfTwo, layer.mesh?.vertexCapacity ?? 0)
+            let indices = max(8192, indexCount.nextPowerOfTwo, layer.mesh?.indexCapacity ?? 0)
+            let mesh: LowLevelMesh
+            do { mesh = try LowLevelMesh(descriptor: Self.dynamicDescriptor(vertices: vertices, indices: indices)) } catch {
+                // Hidden rather than frozen on its last frame, and tried again next frame.
+                layer.entity.isEnabled = false
+                Self.report("\(name) dynamic mesh for \(vertices) vertices: LowLevelMesh failed: \(error)")
+                return
             }
+            layer.mesh = mesh
+            layer.shown = false
         }
-        guard let (mesh, _) = layer.mesh else { return }
+        guard let mesh = layer.mesh else { return }
         // Into fresh buffers, which RealityKit swaps in once written. Written in place (the
         // `with` variants), the headset's renderer, on its own clock, could draw a frame between
         // the vertices and the indices or parts: characters flashed. In place also waited for the
@@ -439,6 +449,30 @@ final class MirrorScene {
             return LowLevelMesh.Part(indexOffset: (Int(part.firstIndex) - firstIndex) * 4, indexCount: Int(part.indexCount),
                                      topology: .triangle, materialIndex: materialIndex, bounds: bounds)
         })
+        // A new mesh goes to RealityKit only now, written and with its parts, as `makeMesh` does: a
+        // MeshResource made from a LowLevelMesh with no parts yet could stay invisible for the whole
+        // run (in another port, about one launch in eight). Until then the layer is hidden, rather
+        // than showing the old mesh's last frame.
+        if !layer.shown {
+            guard !mesh.parts.isEmpty else {
+                layer.entity.isEnabled = false
+                return
+            }
+            let resource: MeshResource
+            do { resource = try MeshResource(from: mesh) } catch {
+                layer.entity.isEnabled = false
+                Self.report("\(name) dynamic mesh: MeshResource failed: \(error)")
+                return
+            }
+            if layer.entity.model == nil {
+                layer.entity.model = ModelComponent(mesh: resource, materials: dynamicMaterialList)
+            } else {
+                layer.entity.model?.mesh = resource
+            }
+            layer.shown = true
+            NSLog("%@", "[SHARVR] mirror: \(name) dynamic mesh for "
+                  + "\(mesh.vertexCapacity) vertices shown, with \(mesh.parts.count) parts")
+        }
         layer.entity.isEnabled = true
     }
 
@@ -647,7 +681,7 @@ final class MirrorScene {
     private static var reports = 0
     private static func report(_ message: String) {
         reports += 1
-        if reports <= 20 { print("[SHARVR] mirror: \(message)") }
+        if reports <= 20 { NSLog("%@", "[SHARVR] mirror: \(message)") }
     }
 
     private func makeTexture(pixels: [UInt8], width: Int, height: Int) -> TextureResource? {

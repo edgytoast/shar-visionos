@@ -96,8 +96,9 @@ walks through both.
 The full install guide, including everything the build does on your Mac, is
 [AVP-INSTALL.md](AVP-INSTALL.md).
 
-Got new changes with `git pull`? Run `./scripts/build.sh` again. It brings the engine up to date and
-rebuilds only what changed.
+Got new changes (`git pull` on `main`, or `git fetch` and `git checkout` the commit the AVP Ports
+Index lists now, if you came from it)? Run `./scripts/build.sh` again. It brings the engine up to
+date and rebuilds only what changed.
 
 Fancy the visionOS Simulator instead? `./scripts/build.sh simulator` (or `both`), then pick a Vision
 Pro simulator in Xcode (Xcode downloads its runtime the first time). It's great for poking around,
@@ -130,7 +131,7 @@ Before you press **Play**, the launcher asks:
   your room rather than in the dark. Gameplay is fully immersive either way.
 - **Pace frames on the GPU (experimental)**, under **Advanced**: has the headset wait for each
   frame on the GPU instead of the CPU. It can help the frame rate. If Full or Progressive ever shows
-  nothing, quit SHAR VR and open it again, and turn this off before you press **Play**.
+  nothing, force quit SHAR VR (see below), open it again, and turn this off before you press **Play**.
 
 **Sense controllers and gamepads** use the VR mod's layout in Full and Progressive, and the game's
 tutorials name the buttons on whatever you're holding. Swing a tracked hand to attack. The **Window**
@@ -187,8 +188,11 @@ head or your controller), and **Graphics › Anti-Aliasing** and **Render Scale*
   less memory to play with, so a long session in a busy level may end early.
 - **The app won't open after a week.** Apps signed with a free account expire after 7 days. Run it
   from Xcode again; your game files and saves stay put.
-- **Full or Progressive shows nothing.** Quit SHAR VR, open it again, and turn off "Pace frames on
-  the GPU" (under **Advanced**) before you press **Play**.
+- **Full or Progressive shows nothing.** Force quit SHAR VR, open it again, and turn off "Pace
+  frames on the GPU" (under **Advanced**) before you press **Play**. Closing its windows isn't
+  enough: the game keeps running, paused, until it's force quit. Hold the top button and the Digital
+  Crown until Force Quit Applications shows, then let go (held longer, they restart the headset),
+  choose SHAR VR and tap **Force Quit**.
 - **The Window view ignores your controller.** Look at it. See above.
 - **Cleaning up.** The engine's build lives in `build/` here (or, if this folder's path has a space in
   it, in `~/Library/Developer/SHARVR`). Delete it to get the space back; `build.sh` makes a new one.

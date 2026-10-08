@@ -16,7 +16,7 @@ struct SHARVRApp: App {
         do {
             try AVAudioSession.sharedInstance().setIntendedSpatialExperience(.bypassed)
         } catch {
-            print("[SHARVR] setIntendedSpatialExperience(.bypassed) failed: \(error)")
+            NSLog("%@", "[SHARVR] setIntendedSpatialExperience(.bypassed) failed: \(error)")
         }
         Trevorbilt.registerFonts()
         GameAudio.observeInterruptions()
@@ -26,6 +26,7 @@ struct SHARVRApp: App {
             Task { @MainActor in await GameScenes.present(mode) }
         }
         SharVisionOS_SetRoomBehindMenus(GameView.roomBehindMenus)
+        GameView.schemePresentEvent = ProcessInfo.processInfo.environment["SHAR_PRESENT_EVENT"]
     }
 
     var body: some Scene {
@@ -79,6 +80,11 @@ enum GameScenes {
     private static var dismissWindow: DismissWindowAction?
     // The View the game is shown for, or nil while it isn't showing.
     static var presentedMode: Int32?
+    // One move between the space and the window at a time: a View picked during one waits for it
+    // to finish (only the latest is kept), so two picked in quick succession can't interleave and
+    // leave the game in neither.
+    private static var moving = false
+    private static var nextMode: Int32?
 
     static func capture(openImmersiveSpace: OpenImmersiveSpaceAction, dismissImmersiveSpace: DismissImmersiveSpaceAction,
                         openWindow: OpenWindowAction, dismissWindow: DismissWindowAction) {
@@ -89,27 +95,57 @@ enum GameScenes {
     }
 
     static func present(_ mode: Int32) async {
+        nextMode = mode
+        guard !moving else {
+            NSLog("%@", "[SHARVR] view \(mode) waits for the move under way")
+            return
+        }
+        moving = true
+        while let mode = nextMode {
+            nextMode = nil
+            await move(to: mode)
+        }
+        moving = false
+    }
+
+    private static func move(to mode: Int32) async {
         let previous = presentedMode
-        print("[SHARVR] view \(mode) (was \(previous.map(String.init) ?? "not showing"))")
-        GameView.shared.style = GameView.style(for: mode)
+        NSLog("%@", "[SHARVR] view \(mode) (was \(previous.map(String.init) ?? "not showing"))")
+        // (Not for Window: a space's style changes live, and the one closing would change first.)
+        if mode != 2 { GameView.shared.style = GameView.style(for: mode) }
         guard let previous, previous != mode else { return }
         presentedMode = mode
         if mode == 2 {
-            // The window opens once the space has gone; the engine waits for it in between.
+            // The window opens once the space has gone; the engine waits for it in between. The
+            // move is over once it shows (a second at most), so that a quick move back to the
+            // space doesn't dismiss a window that hasn't arrived yet, and have it arrive after.
             await dismissImmersiveSpace?()
             openWindow?(id: SHARVRApp.gameWindowID)
+            for _ in 0..<20 where !GameView.shared.windowShowing {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
         } else if previous == 2 {
-            // The space opens while the window still shows, then the window goes.
+            // The space opens while the window still shows, then the window goes, and the launcher
+            // too if it's open beside it (as Play leaves it for the space): it would float in the
+            // game and take the pinches. The engine draws to the space from now, not once the
+            // window has gone.
             if case .opened = await openImmersiveSpace?(id: SHARVRApp.immersiveSpaceID) {
+                SharVisionOS_SetWindowActive(false)
                 dismissWindow?(id: SHARVRApp.gameWindowID)
+                dismissWindow?(id: SHARVRApp.launcherID, value: SHARVRApp.launcherID)
+                // The move is over once the window has gone (a second at most), so that its going
+                // isn't taken for the player closing it after a quick move back to Window.
+                for _ in 0..<20 where GameView.shared.windowShowing {
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
             } else {
                 presentedMode = previous
             }
         }
     }
 
-    // The window was closed with its own controls rather than for the immersive space: bring back
-    // the launcher, which offers Resume.
+    // The game's window has gone. Closed with its own controls rather than for the immersive
+    // space: bring back the launcher, which offers Resume.
     static func windowClosed() {
         guard presentedMode == 2 else { return }
         presentedMode = nil
@@ -128,6 +164,9 @@ final class GameView {
     var windowShowing = false
     /// Counts the game's window being closed with its own controls: the launcher comes back on Play.
     var windowCloses = 0
+    /// An Xcode scheme's SHAR_PRESENT_EVENT, as the app started: what the launcher's "Pace frames
+    /// on the GPU" leaves in place when it's off.
+    static var schemePresentEvent: String?
 
     // Portrait, because the wide default portal cuts off what's below eye level (Homer's hands,
     // the wheel). With the system's own range: a custom one (0.1...1.0, opening at 0.4) showed
@@ -269,7 +308,7 @@ enum GameAudio {
     private static func began() {
         guard !interrupted else { return }
         interrupted = true
-        print("[SHARVR] audio interrupted")
+        NSLog("%@", "[SHARVR] audio interrupted")
         SharVisionOS_SetAudioInterrupted(true)
     }
 
@@ -280,10 +319,10 @@ enum GameAudio {
         do {
             try AVAudioSession.sharedInstance().setActive(true)
             interrupted = false
-            print("[SHARVR] audio interruption over")
+            NSLog("%@", "[SHARVR] audio interruption over")
             SharVisionOS_SetAudioInterrupted(false)
         } catch {
-            print("[SHARVR] the audio session isn't back yet: \(error.localizedDescription)")
+            NSLog("%@", "[SHARVR] the audio session isn't back yet: \(error.localizedDescription)")
             guard attempts > 1 else { return }
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(1))
@@ -303,7 +342,7 @@ enum MemoryWatch {
         let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
         source.setEventHandler { [weak source] in
             guard let event = source?.data else { return }
-            print("[SHARVR] memory pressure (\(event.contains(.critical) ? "critical" : "warning")): "
+            NSLog("%@", "[SHARVR] memory pressure (\(event.contains(.critical) ? "critical" : "warning")): "
                   + "\(os_proc_available_memory() / 1_048_576) MB left")
         }
         source.resume()

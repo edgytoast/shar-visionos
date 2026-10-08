@@ -34,9 +34,10 @@ public final class InputMonitor {
     private let observations = Observations()
     private var started = false
 
-    /// `testOverride`, for headless Simulator runs: "hands:denied,sense:LR,gamepad:none" (hands:
-    /// allowed, denied, notasked or unavailable; sense: none, L, R or LR; gamepad: none or yes).
-    /// Nothing is read until `start()`.
+    /// `testOverride`, for headless Simulator runs: "hands:denied,sense:LR,gamepad:none" (hands and
+    /// accessories, for the Sense controllers' tracking: allowed, denied, notasked or unavailable,
+    /// allowed if only the other is given, the real permissions if neither is; sense: none, L, R or
+    /// LR; gamepad: none or yes). Nothing is read until `start()`.
     public init(testOverride: String? = nil) {
         var parsed: [String: String] = [:]
         for pair in (testOverride ?? "").split(separator: ",") {
@@ -65,9 +66,9 @@ public final class InputMonitor {
     /// changed a permission in Settings, or charged a controller).
     public func refresh() async {
         readControllers()
-        if let value = testOverride["hands"] {
-            hands = Self.permission(named: value)
-            accessories = .allowed
+        if testOverride["hands"] != nil || testOverride["accessories"] != nil {
+            hands = Self.permission(named: testOverride["hands"] ?? "allowed")
+            accessories = Self.permission(named: testOverride["accessories"] ?? "allowed")
             return
         }
         guard HandTrackingProvider.isSupported else {

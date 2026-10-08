@@ -12,7 +12,7 @@ struct SHARConfiguration: CompositorLayerConfiguration {
         // differs only in sRGB, which the default usage (renderTarget | shaderRead) allows. Keep
         // the default: the first tests on the headset ran with it, while adding .pixelFormatView was
         // only ever tested in the Simulator.
-        print("[SHARVR] layer config: layout \(configuration.layout), colour \(configuration.colorFormat.rawValue) "
+        NSLog("%@", "[SHARVR] layer config: layout \(configuration.layout), colour \(configuration.colorFormat.rawValue) "
               + "usage \(configuration.colorUsage.rawValue), depth \(configuration.depthFormat.rawValue) "
               + "usage \(configuration.depthUsage.rawValue); supported colour \(capabilities.supportedColorFormats(options: []).map(\.rawValue)), "
               + "depth \(capabilities.supportedDepthFormats.map(\.rawValue)); progressive: layouts "

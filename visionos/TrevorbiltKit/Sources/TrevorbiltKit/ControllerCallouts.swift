@@ -59,7 +59,7 @@ public struct ControllerCallouts: View {
             }
             .allowsHitTesting(false)
             ForEach(layout.callouts, id: \.control.control) { callout in
-                CalloutLabel(callout: callout)
+                CalloutLabel(callout: callout, height: heights[callout.control.control] ?? 40)
             }
         }
         .frame(width: Self.size.width, height: Self.size.height)
@@ -536,6 +536,8 @@ extension DynamicTypeSize {
 /// then the control's name), or under it below the drawing.
 struct CalloutLabel: View {
     let callout: CalloutLayout.Callout
+    /// The words' height, measured (`height(of:size:)`).
+    let height: CGFloat
 
     var body: some View {
         let control = callout.control
@@ -559,12 +561,13 @@ struct CalloutLabel: View {
             case .right:
                 words.frame(width: 92, alignment: .leading).position(x: CalloutLayout.width - 96 + 46, y: callout.chip.y)
             case .below:
-                words.frame(width: 140).position(x: callout.chip.x, y: callout.chip.y + 34)
+                // Hung from just under the chip, so larger text grows down, away from it.
+                words.frame(width: 140, height: 0, alignment: .top).position(x: callout.chip.x, y: callout.chip.y + 14)
             }
         }
         .frame(width: CalloutLayout.width, height: ControllerCallouts.size.height, alignment: .topLeading)
         // VoiceOver finds the chip and its words, not the whole area.
-        .contentShape(.accessibility, CalloutShape(callout: callout))
+        .contentShape(.accessibility, CalloutShape(callout: callout, height: height))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(control.name): \(control.actions.joined(separator: ", "))")
     }
@@ -573,13 +576,17 @@ struct CalloutLabel: View {
 /// The area a callout's chip and words take.
 struct CalloutShape: Shape {
     let callout: CalloutLayout.Callout
+    /// The words' height, measured.
+    let height: CGFloat
 
     func path(in rect: CGRect) -> Path {
         let chip = callout.chip
+        // Beside the chip, as tall as the words centred on it; below, from the chip to under them.
+        let side = max(40, height + 8)
         let area: CGRect = switch callout.side {
-        case .left: CGRect(x: 4, y: chip.y - 20, width: chip.x + 14 - 4, height: 40)
-        case .right: CGRect(x: chip.x - 14, y: chip.y - 20, width: CalloutLayout.width - 4 - (chip.x - 14), height: 40)
-        case .below: CGRect(x: chip.x - 70, y: chip.y - 14, width: 140, height: 78)
+        case .left: CGRect(x: 4, y: chip.y - side / 2, width: chip.x + 14 - 4, height: side)
+        case .right: CGRect(x: chip.x - 14, y: chip.y - side / 2, width: CalloutLayout.width - 4 - (chip.x - 14), height: side)
+        case .below: CGRect(x: chip.x - 70, y: chip.y - 14, width: 140, height: max(78, 32 + height))
         }
         return Path(roundedRect: area, cornerRadius: 10)
     }

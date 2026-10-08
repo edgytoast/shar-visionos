@@ -106,9 +106,10 @@ them; `SHAR_PRESENT_EVENT`, the launcher's toggle, is the one that works everywh
 | `SHAR_TEST_PAD=none` | The Controls guide draws as if no gamepad (`none`: the DualSense kind) or an Xbox-kind pad (`xbox`) were connected, with the neutral symbols. The Simulator always has its own pad. |
 | `SHAR_TEST_SHEET=manage` | Opens that sheet: `manage` or `advanced` (Play), `credits` or `diagnostics` (About), `port:<index id>` (Ports). Use with `SHAR_TEST_TAB`. |
 | `SHAR_TEST_TAB=play` | Opens the launcher on that tab (`play`, `controls`, `ports` or `about`). |
-| `SHAR_TEST_INPUTS=hands:denied,sense:none,gamepad:none` | Shows the launcher's inputs as given instead of what's there (hands: `allowed`, `denied`, `notasked` or `unavailable`; sense: `none`, `L`, `R` or `LR`; gamepad: `none` or `yes`), to check what it says for each. The Controls guide still reads the real controllers. |
+| `SHAR_TEST_INPUTS=hands:denied,sense:none,gamepad:none` | Shows the launcher's inputs as given instead of what's there (hands, and `accessories` for the Sense controllers' tracking: `allowed`, `denied`, `notasked` or `unavailable`, allowed if only the other is given (with neither, the real permissions are read); sense: `none`, `L`, `R` or `LR`; gamepad: `none` or `yes`), to check what it says for each. The Controls guide still reads the real controllers. |
 | `SHAR_TEST_WINDOW_HIDE=40~10` | Puts the Window view in the background 40 seconds after it opens, for 10 seconds, as leaving it would: the game holds (no frames, sound paused) and comes back on its pause menu. |
 | `SHAR_TEST_WINDOW_RELIEF=1` | Shows the Window view's older depth-relief picture instead of the scene mirror (`SHAR_TEST_WINDOW_LAYERS=pb` picks its layers). |
+| `SHAR_TEST_LAUNCHER_BESIDE=1` | Opens the launcher beside the Window view's window, 3 seconds after the window shows, as a look at the controls would. With `view:` events, shows what a move to Full or Progressive does with it. |
 
 For example:
 

@@ -197,7 +197,7 @@ struct ControlsView: View {
         // Headless Simulator runs: every neutral symbol the drawings use must exist.
         if TestHooks.value("SHAR_TEST_TAB") != nil {
             let missing = GlyphControl.missingNeutralSymbols()
-            print("[SHARVR] controls symbols: \(missing.isEmpty ? "all present" : "missing \(missing.joined(separator: ", "))")")
+            NSLog("%@", "[SHARVR] controls symbols: \(missing.isEmpty ? "all present" : "missing \(missing.joined(separator: ", "))")")
         }
         // Headless Simulator runs: SHAR_TEST_ACCESSORY_PROBE=1 also asks for every other controller
         // (the Simulator has no Sense controllers), to see whether the request works from a window.
@@ -205,15 +205,15 @@ struct ControlsView: View {
             for controller in GCController.controllers() where controller.productCategory != GCProductCategorySpatialController {
                 do {
                     let accessory = try await Accessory(device: controller)
-                    print("[SHARVR] accessory probe: \(controller.vendorName ?? "?"): \(accessory.name), usdz \(accessory.usdzFile?.lastPathComponent ?? "none")")
+                    NSLog("%@", "[SHARVR] accessory probe: \(controller.vendorName ?? "?"): \(accessory.name), usdz \(accessory.usdzFile?.lastPathComponent ?? "none")")
                 } catch {
-                    print("[SHARVR] accessory probe: \(controller.vendorName ?? "?"): \(error)")
+                    NSLog("%@", "[SHARVR] accessory probe: \(controller.vendorName ?? "?"): \(error)")
                 }
             }
         }
         let spatial = GCController.controllers().filter { $0.productCategory == GCProductCategorySpatialController }
         guard !spatial.isEmpty else {
-            print("[SHARVR] sense model: fallback (no Sense controller connected)")
+            NSLog("%@", "[SHARVR] sense model: fallback (no Sense controller connected)")
             return
         }
         for controller in spatial {
@@ -221,13 +221,13 @@ struct ControlsView: View {
                 let accessory = try await Accessory(device: controller)
                 guard !Task.isCancelled else { return }
                 if let url = accessory.usdzFile {
-                    print("[SHARVR] sense model: system USDZ found for \(accessory.name) (\(accessory.inherentChirality)): \(url.path)")
+                    NSLog("%@", "[SHARVR] sense model: system USDZ found for \(accessory.name) (\(accessory.inherentChirality)): \(url.path)")
                 } else {
-                    print("[SHARVR] sense model: fallback (\(accessory.name) has no USDZ)")
+                    NSLog("%@", "[SHARVR] sense model: fallback (\(accessory.name) has no USDZ)")
                 }
             } catch {
                 guard !Task.isCancelled else { return }
-                print("[SHARVR] sense model: fallback (\(controller.vendorName ?? "a Sense controller"): \(error))")
+                NSLog("%@", "[SHARVR] sense model: fallback (\(controller.vendorName ?? "a Sense controller"): \(error))")
             }
         }
     }

@@ -21,7 +21,7 @@ struct GameWindowView: View {
             RealityView { content in
                 let loaded: GameScreen?
                 do { loaded = try await GameScreen() } catch {
-                    print("[SHARVR] the game window's materials failed to load: \(error)")
+                    NSLog("%@", "[SHARVR] the game window's materials failed to load: \(error)")
                     loaded = nil
                 }
                 guard let screen = loaded else {
@@ -74,7 +74,18 @@ struct GameWindowView: View {
             // whether visionOS also reports .inactive during play (a glance at Control Center or a
             // notification) is unchecked on the headset, and holding then would pause the game.
             SharVisionOS_SetWindowVisible(phase != .background)
-            print("[SHARVR] window phase: \(phase)")
+            NSLog("%@", "[SHARVR] window phase: \(phase)")
+        }
+        .task {
+            // Headless Simulator runs: SHAR_TEST_LAUNCHER_BESIDE=1 opens the launcher beside the
+            // window once it shows, as a look at the controls would.
+            if TestHooks.value("SHAR_TEST_LAUNCHER_BESIDE") == "1" {
+                // (Not if the game has moved on meanwhile: a dismissed window's task isn't always
+                // cancelled at once.)
+                guard (try? await Task.sleep(for: .seconds(3))) != nil, GameScenes.presentedMode == 2 else { return }
+                NSLog("%@", "[SHARVR] test: opening the launcher beside the window")
+                openWindow(id: SHARVRApp.launcherID, value: SHARVRApp.launcherID)
+            }
         }
         .task {
             // Headless Simulator runs: SHAR_TEST_WINDOW_HIDE="40~10" puts the window in the
@@ -164,7 +175,7 @@ final class GameScreen {
                 self.mirror = mirror
                 SharVisionOS_SetMirrorEnabled(true)
             } catch {
-                print("[SHARVR] the scene mirror failed to load, so the window shows the relief: \(error)")
+                NSLog("%@", "[SHARVR] the scene mirror failed to load, so the window shows the relief: \(error)")
                 SharVisionOS_SetMirrorEnabled(false)
             }
         }
@@ -188,7 +199,7 @@ final class GameScreen {
         SharVisionOS_SetWindowWidth(bounds.extents.x)
         if bounds.extents != loggedExtents {
             loggedExtents = bounds.extents
-            print(String(format: "[SHARVR] window: %.3f x %.3f x %.3f m, centred at (%.3f, %.3f), from z %.3f to %.3f in the view's scene",
+            NSLog("%@", String(format: "[SHARVR] window: %.3f x %.3f x %.3f m, centred at (%.3f, %.3f), from z %.3f to %.3f in the view's scene",
                          bounds.extents.x, bounds.extents.y, bounds.extents.z, bounds.center.x, bounds.center.y, bounds.min.z,
                          bounds.max.z))
         }
@@ -230,7 +241,7 @@ final class GameScreen {
               let hudTexture = Self.texture(width: size.x, height: size.y, mipmapped: true),
               let colourResource = try? TextureResource(from: colour),
               let hudResource = try? TextureResource(from: hudTexture) else {
-            print("[SHARVR] the game window's \(eye.x)x\(eye.y) textures failed")
+            NSLog("%@", "[SHARVR] the game window's \(eye.x)x\(eye.y) textures failed")
             return
         }
         for index in reliefMaterials.indices {

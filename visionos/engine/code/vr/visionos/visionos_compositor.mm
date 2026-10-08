@@ -1144,7 +1144,9 @@ void EndWindowFrame()
         }
         id<MTLCommandBuffer> commands = [gQueue commandBuffer];
         id<MTLTexture> colour = input.scene ? input.scene : input.final;
-        if (gPresent.antiAliasing == 2) colour = EncodeAntiAliasing(commands, colour, 2);
+        // SMAA only for a frame the window copies: a mirror-only one takes just its HUD, from the
+        // frame itself, and nothing reads what SMAA would make but its pixel format.
+        if (gPresent.antiAliasing == 2 && !input.mirrorOnly) colour = EncodeAntiAliasing(commands, colour, 2);
         const bool encoded = EncodeWindowFrame(commands, input, colour, gWindowFrames[slot]);
         [commands addCompletedHandler:^(id<MTLCommandBuffer>) {
             std::lock_guard<std::mutex> lock(gWindowMutex);

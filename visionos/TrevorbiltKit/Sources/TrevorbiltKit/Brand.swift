@@ -29,7 +29,7 @@ public enum Trevorbilt {
             Bundle.module.url(forResource: $0, withExtension: "ttf", subdirectory: "Fonts")
         }
         CTFontManagerRegisterFontURLs(urls as CFArray, .process, true) { errors, _ in
-            for error in errors as? [CFError] ?? [] { print("[TrevorbiltKit] a font didn't register: \(error)") }
+            for error in errors as? [CFError] ?? [] { NSLog("%@", "[TrevorbiltKit] a font didn't register: \(error)") }
             return true
         }
     }

@@ -83,9 +83,11 @@ struct LauncherView: View {
         .sheet(isPresented: $managing) { manageSheet }
         .sheet(isPresented: $advanced) { advancedSheet }
         .onAppear {
+            NSLog("%@", "[SHARVR] launcher shows")
             GameScenes.capture(openImmersiveSpace: openImmersiveSpace, dismissImmersiveSpace: dismissImmersiveSpace,
                                openWindow: openWindow, dismissWindow: dismissWindow)
         }
+        .onDisappear { NSLog("%@", "[SHARVR] launcher closes") }
         // The guide opens on what's connected, for the View the game will play.
         // (Not over a test run's page: SHAR_TEST_CONTROLS sets its own.)
         .onChange(of: tab) { _, tab in
@@ -120,8 +122,9 @@ struct LauncherView: View {
             // Headless Simulator runs: simctl launch with SIMCTL_CHILD_SHAR_IMPORT_PATH=<host path>.
             if let path = TestHooks.value("SHAR_IMPORT_PATH") {
                 startImport(URL(fileURLWithPath: path))
-            // Headless Simulator runs: simctl launch with SIMCTL_CHILD_SHAR_AUTO_PLAY=1.
-            } else if dataPresent, TestHooks.value("SHAR_AUTO_PLAY") == "1" {
+            // Headless Simulator runs: simctl launch with SIMCTL_CHILD_SHAR_AUTO_PLAY=1 (once: not
+            // again from a launcher opened later).
+            } else if dataPresent, !engineRunning, TestHooks.value("SHAR_AUTO_PLAY") == "1" {
                 await play()
             }
         }
@@ -324,7 +327,7 @@ struct LauncherView: View {
                 Toggle(isOn: $paceFramesOnGPU) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Pace frames on the GPU (experimental)").font(.tbBody(14, weight: .bold))
-                        Text("Can help the frame rate in Full and Progressive. If the game ever goes blank, quit SHAR VR, open it again and turn this off.")
+                        Text("Can help the frame rate in Full and Progressive. If the game ever goes blank, force quit SHAR VR (hold the top button and the Digital Crown until Force Quit Applications shows), open it again and turn this off.")
                             .font(.tbBody(12)).foregroundStyle(.white.opacity(0.8))
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -348,6 +351,11 @@ struct LauncherView: View {
             return InputVerdict("The Window view plays with a controller. Connect your Sense controllers or a gamepad.", ready: false)
         }
         if inputs.senseLeft != nil && inputs.senseRight != nil {
+            // Without accessory tracking the game has their buttons but not where they are.
+            if inputs.accessories == .denied {
+                return InputVerdict("Controller tracking is off for SHAR VR, so the game can't see where your Sense controllers are. Allow it in Settings.",
+                                    ready: false, settingsNeeded: true)
+            }
             return InputVerdict("Ready to play with your Sense controllers.", ready: true)
         }
         if inputs.anySense {
@@ -399,7 +407,7 @@ struct LauncherView: View {
         tab = .play
         // Never under a paused game (the engine runs once per process and keeps its files open).
         guard !engineRunning else {
-            playError = "The game is paused. To bring in new game files, close SHAR VR, open it again, and import them before you play."
+            playError = "The game is paused. To bring in new game files, force quit SHAR VR (hold the top button and the Digital Crown until Force Quit Applications shows), open it again, and import them before you play."
             return
         }
         importer.importGame(from: url) {
@@ -416,8 +424,15 @@ struct LauncherView: View {
         playError = nil
         // The game's memory comes first: the Ports tab's pictures go now, not whenever it's next seen.
         PortsBrowser.letGoOfPictures()
-        // Read by the engine's first frame; an Xcode scheme's own setting also counts.
-        if paceFramesOnGPU { setenv("SHAR_PRESENT_EVENT", "1", 1) }
+        // Read by the space's first frame, so set or cleared on every Play before it (a Play whose
+        // space didn't open may have set it); an Xcode scheme's own setting also counts.
+        if paceFramesOnGPU {
+            setenv("SHAR_PRESENT_EVENT", "1", 1)
+        } else if let scheme = GameView.schemePresentEvent {
+            setenv("SHAR_PRESENT_EVENT", scheme, 1)
+        } else {
+            unsetenv("SHAR_PRESENT_EVENT")
+        }
         // View: Window plays in the shared space, beside other apps.
         let mode = GameView.savedMode()
         if mode == 2 {
@@ -427,7 +442,7 @@ struct LauncherView: View {
             return
         }
         let result = await openImmersiveSpace(id: SHARVRApp.immersiveSpaceID)
-        print("[SHARVR] openImmersiveSpace: \(result)")
+        NSLog("%@", "[SHARVR] openImmersiveSpace: \(result)")
         switch result {
         case .opened:
             GameScenes.presentedMode = mode
@@ -468,7 +483,7 @@ struct LauncherView: View {
         appName: "SHAR VR",
         repository: repository,
         releaseBranch: "main",
-        updateInstructions: "git pull, then ./scripts/build.sh, then run it from Xcode. Your game files and saves stay.",
+        updateInstructions: "From the AVP Ports Index: git fetch, then git checkout the commit SHAR VR's page there lists now. From main: git pull. Then ./scripts/build.sh, and run it from Xcode. Your game files and saves stay.",
         credits: [
             .init("Trevorbilt", "The Vision Pro port: the visionOS runtime, the Window view's scene mirror, the input, the app and the build.", "https://trevorbilt.com"),
             .init("Radical Entertainment", "Made The Simpsons: Hit & Run, published in 2003 by Vivendi Universal Games and Fox Interactive.", "https://en.wikipedia.org/wiki/Radical_Entertainment"),
